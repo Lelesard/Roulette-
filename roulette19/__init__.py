@@ -1,0 +1,2 @@
+"""ROULETTE ANALYZER 19 PRO — ÉDITION PROFESSIONNELLE."""
+__version__ = '1.0.0'
