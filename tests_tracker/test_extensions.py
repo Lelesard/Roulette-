@@ -1,0 +1,429 @@
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import copy
+import json
+import math
+import shutil
+import sys
+import tempfile
+import time
+import unittest
+from dataclasses import replace
+from pathlib import Path
+from unittest.mock import patch
+
+import cv2
+import numpy as np
+from PySide6.QtCore import Qt, QPoint
+from PySide6.QtGui import QImage
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication
+
+from tracker.capture import crop_roi, brave_windows
+from tracker.evaluation import PhysicalState, estimate, evaluate
+from tracker.experimental import CandidateTracker
+from tracker.ocr import reconcile, read_numbers
+from tracker.storage import Store
+from tracker.benchmark import run as benchmark
+
+
+class PersistenceTests(unittest.TestCase):
+    def test_pending_settlement_and_rollback_are_atomic(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "store.sqlite"
+            s = Store(path)
+            sid = s.create_session("A", "VIP Roulette")
+            bets = [{"kind": "plein", "target": "0", "stake": 10}]
+            s.save_setting(f"pending_{sid}", bets)
+            with self.assertRaises(ValueError):
+                s.add_spin(
+                    sid,
+                    0,
+                    [{"kind": "inconnu", "target": "0", "stake": 10}],
+                    settle_pending=True,
+                )
+            self.assertEqual(s.setting(f"pending_{sid}"), bets)
+            self.assertEqual(s.counts(sid), {})
+            s.add_spin(sid, 0, bets, settle_pending=True)
+            s.close()
+            s = Store(path)
+            self.assertEqual(s.setting(f"pending_{sid}"), [])
+            self.assertEqual(s.summary(sid)["balance"], 350)
+            s.close()
+
+    def test_ocr_duplicates_repeated_outcome_and_reopen(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "store.sqlite"
+            s = Store(path)
+            sid = s.create_session("A", "B")
+            first = [7, 7, 2, 19, 0]
+            s.commit_ocr(sid, first, reconcile([], first))
+            self.assertEqual(reconcile(first, first), [])
+            # Repeated 7 is a distinct spin because the rest of the panel shifts.
+            second = [7, 7, 7, 2, 19]
+            self.assertEqual(reconcile(first, second), [7])
+            s.commit_ocr(sid, second, [7])
+            s.close()
+            s = Store(path)
+            self.assertEqual(s.ocr_snapshot(sid), second)
+            self.assertEqual(s.counts(sid)[7], 3)
+            self.assertEqual(s.summary(sid)["balance"], 0)
+            with self.assertRaises(ValueError):
+                s.commit_ocr(sid, [0, 1, 37], [1])
+            self.assertEqual(s.ocr_snapshot(sid), second)
+            s.close()
+
+    def test_export_preserves_dates_and_attributes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = Store(Path(tmp) / "store.sqlite")
+            sid = s.create_session("A", "B")
+            s.add_spin(sid, 0)
+            for suffix in ("json", "csv"):
+                path = Path(tmp) / ("export." + suffix)
+                s.export(sid, path)
+                other = s.create_session(suffix, "B")
+                s.import_file(other, path)
+                self.assertEqual(
+                    s.spins(sid)[0]["created"], s.spins(other)[0]["created"]
+                )
+            obj = json.loads((Path(tmp) / "export.json").read_text())
+            self.assertEqual(obj[0]["couleur"], "vert")
+            self.assertEqual(obj[0]["position_cylindre"], 0)
+            s.close()
+
+    def test_mixed_bets_and_cash_flows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = Store(Path(tmp) / "store.sqlite")
+            sid = s.create_session("A", "B")
+            s.cash(sid, "initial", 10000)
+            s.cash(sid, "dépôt", 1000)
+            s.cash(sid, "retrait", 200)
+            bets = [
+                {"kind": "plein", "target": "1", "stake": 50},
+                {"kind": "couleur", "target": "rouge", "stake": 100},
+                {"kind": "douzaine", "target": "2", "stake": 100},
+            ]
+            spin = s.add_spin(sid, 1, bets)
+            self.assertEqual(s.summary(sid)["gross"], 2000)
+            self.assertEqual(s.summary(sid)["net"], 1750)
+            self.assertEqual(s.summary(sid)["balance"], 12550)
+            s.edit_spin(spin, 0)
+            self.assertEqual(s.summary(sid)["losses"], 250)
+            s.close()
+
+
+class VisionTests(unittest.TestCase):
+    def test_regions_and_ambiguous_overlap(self):
+        frame = np.zeros((100, 200, 3), np.uint8)
+        self.assertEqual(crop_roi(frame, (0.1, 0.2, 0.5, 0.4)).shape, (40, 100, 3))
+        for roi in ((-1, 0, 0.5, 0.5), (0.9, 0, 0.5, 0.5), (0, 0, 0, 0.5)):
+            with self.assertRaises(ValueError):
+                crop_roi(frame, roi)
+        self.assertIsNone(reconcile([1, 2, 3, 4], [20, 21, 22, 23]))
+        self.assertIsNone(reconcile([1, 1, 1, 1], [2, 1, 1, 1, 1]))
+        self.assertEqual(reconcile([1, 2, 3, 4], [1, 2, 3]), [])
+
+    def test_tracker_synthetic_continuity_loss_and_camera_change(self):
+        tracker = CandidateTracker()
+        observation = None
+        for i in range(30):
+            frame = np.zeros((200, 200, 3), np.uint8)
+            angle = i * 0.04
+            cv2.circle(
+                frame,
+                (round(100 + 85 * math.cos(angle)), round(100 + 85 * math.sin(angle))),
+                3,
+                (255, 255, 255),
+                -1,
+            )
+            observation = tracker.analyze(frame, i / 30)
+        self.assertIsNotNone(observation.omega)
+        self.assertAlmostEqual(observation.omega, 1.2, delta=0.2)
+        lost = tracker.analyze(np.zeros_like(frame), 1.0)
+        self.assertIsNone(lost.point)
+        self.assertEqual(lost.confidence, 0)
+        changed = tracker.analyze(np.full_like(frame, 255), 1.1)
+        self.assertIn("caméra", changed.message)
+        self.assertFalse(tracker.points)
+
+    @unittest.skipUnless(
+        shutil.which("tesseract"), "Moteur Tesseract facultatif absent"
+    )
+    def test_real_tesseract_on_generated_panel(self):
+        image = np.full((80, 750, 3), 255, np.uint8)
+        for index, n in enumerate([7, 12, 18, 4, 21]):
+            cv2.putText(
+                image,
+                str(n),
+                (15 + index * 145, 57),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1.5,
+                (0, 0, 0),
+                2,
+                cv2.LINE_AA,
+            )
+        self.assertEqual(read_numbers(image), [7, 12, 18, 4, 21])
+        self.assertEqual(read_numbers(image, newest_left=False), [21, 4, 18, 12, 7])
+
+    @unittest.skipIf(os.name == "nt", "Le refus hors Windows ne concerne pas Windows")
+    def test_capture_explains_unsupported_platform(self):
+        with self.assertRaisesRegex(RuntimeError, "Windows"):
+            brave_windows()
+
+
+class EvaluationTests(unittest.TestCase):
+    def test_benchmark_requires_annotations_and_does_not_invent_rates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blank.avi"
+            writer = cv2.VideoWriter(
+                str(path), cv2.VideoWriter_fourcc(*"MJPG"), 10, (100, 100)
+            )
+            for _ in range(10):
+                writer.write(np.zeros((100, 100, 3), np.uint8))
+            writer.release()
+            manifest = {
+                "video": "blank.avi",
+                "split": "validation",
+                "wheel_roi": [0, 0, 1, 1],
+                "frames": [
+                    {"frame": 0, "ball_xy": None},
+                    {"frame": 9, "ball_xy": None},
+                ],
+            }
+            annotations = Path(tmp) / "manifest.json"
+            annotations.write_text(json.dumps(manifest))
+            report = benchmark(annotations)
+            self.assertEqual(report["annotated_frames"], 2)
+            self.assertIsNone(report["detection_rate"])
+            self.assertIsNone(report["precision"])
+            manifest["frames"] = []
+            annotations.write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(ValueError, "Aucune frame"):
+                benchmark(annotations)
+
+    def state(self):
+        return PhysicalState(
+            seconds=2,
+            last_frame_seconds=2,
+            ball_angle=0.5,
+            ball_omega=8,
+            ball_alpha=-2,
+            rotor_angle=0.2,
+            rotor_omega=-1,
+            release_speed=3,
+            fall_seconds=0.3,
+            rebound_offset=0.1,
+            uncertainty_radians=0.4,
+            confidence=0.95,
+            calibrated=True,
+        )
+
+    def test_model_refuses_future_frames_missing_calibration_and_large_uncertainty(
+        self,
+    ):
+        state = self.state()
+        prediction = estimate(state, 3, 9)
+        self.assertEqual(len(prediction["numbers"]), 9)
+        for changed in (
+            replace(state, calibrated=False),
+            replace(state, last_frame_seconds=2.1),
+            replace(state, uncertainty_radians=3),
+            replace(state, ball_alpha=2),
+            replace(state, confidence=0.8),
+            replace(state, ball_angle=float("nan")),
+        ):
+            self.assertIsNone(estimate(changed, 3, 9))
+        self.assertIsNone(estimate(state, 2))
+
+    def test_evaluation_rejects_leakage_duplicates_and_development_set(self):
+        p = estimate(self.state(), 3, 9)
+        row = {
+            "video": "fixture.mp4",
+            "spin_id": 1,
+            "split": "validation",
+            "prediction": p,
+            "closes_at": 3,
+            "result_seconds": 8,
+            "result": p["center"],
+        }
+        late = copy.deepcopy(row)
+        late["spin_id"] = 2
+        late["prediction"]["last_frame_seconds"] = 3.1
+        development = copy.deepcopy(row)
+        development["spin_id"] = 3
+        development["split"] = "development"
+        report = evaluate([row, row, late, development])
+        self.assertEqual(report["evaluable"], 1)
+        self.assertEqual(report["rejected"], 3)
+        self.assertEqual(report["groups"][0]["hits"], 1)
+        self.assertIsNone(evaluate([])["groups"][0]["rate"])
+
+
+class DesktopTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self.qt_errors = []
+        self.previous_hook = sys.excepthook
+        sys.excepthook = lambda kind, value, tb: self.qt_errors.append(
+            f"{kind.__name__}: {value}"
+        )
+
+    def tearDown(self):
+        self.app.processEvents()
+        sys.excepthook = self.previous_hook
+        self.assertEqual(self.qt_errors, [], "Exception dans un callback Qt")
+
+    def wait(self, predicate):
+        deadline = time.monotonic() + 5
+        while not predicate() and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.01)
+        self.assertTrue(predicate())
+
+    def test_manual_roi_touch_and_profile_persistence(self):
+        from tracker.gui import Window
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "gui.sqlite"
+            w = Window(path)
+            w.show()
+            self.app.processEvents()
+            try:
+                image = QImage(640, 360, QImage.Format.Format_RGB888)
+                image.fill(Qt.GlobalColor.black)
+                w.live_image.set_image(image)
+                w.begin_roi(w.live_image, "wheel_roi")
+                rect = w.live_image.image_rect()
+                a = QPoint(
+                    round(rect.x() + rect.width() * 0.1),
+                    round(rect.y() + rect.height() * 0.1),
+                )
+                b = QPoint(
+                    round(rect.x() + rect.width() * 0.7),
+                    round(rect.y() + rect.height() * 0.8),
+                )
+                QTest.mousePress(w.live_image, Qt.MouseButton.LeftButton, pos=a)
+                QTest.mouseMove(w.live_image, b)
+                QTest.mouseRelease(w.live_image, Qt.MouseButton.LeftButton, pos=b)
+                self.assertAlmostEqual(
+                    w.store.profile(w.active_table())["wheel_roi"][0], 0.1, delta=0.01
+                )
+                w.add_bet("plein", "0")
+                saved = list(w.bets)
+                sid = w.sid
+            finally:
+                w.close()
+                self.app.processEvents()
+            w = Window(path)
+            try:
+                self.assertEqual(w.sid, sid)
+                self.assertEqual(w.bets, saved)
+                self.assertIn("wheel_roi", w.store.profile(w.active_table()))
+            finally:
+                w.close()
+                self.app.processEvents()
+
+    def test_ocr_worker_is_queued_and_stale_context_is_ignored(self):
+        from tracker.gui import Window
+
+        with tempfile.TemporaryDirectory() as tmp:
+            w = Window(Path(tmp) / "gui.sqlite")
+            try:
+                w.ocr_enabled.setChecked(True)
+                w.ocr_auto.setChecked(True)
+                context = (w.source_epoch, w.sid, "video", "fixture")
+                with patch("tracker.ocr.read_numbers", return_value=[7, 2, 19, 0]):
+                    for attempt in range(2):
+                        w.ocr_busy = True
+                        w.ocr_request.emit(
+                            context, np.zeros((20, 100, 3), np.uint8), "", True
+                        )
+                        self.wait(lambda: not w.ocr_busy)
+                self.assertEqual(sum(w.store.counts(w.sid).values()), 4)
+                w.reset_ocr_proposal()
+                w.ocr_ready(context, [9, 7, 2, 19])
+                w.ocr_ready(context, [9, 7, 2, 19])
+                self.assertEqual(sum(w.store.counts(w.sid).values()), 4)
+            finally:
+                w.close()
+                self.app.processEvents()
+
+    def test_analysis_worker_runs_without_blocking_sqlite_or_ui(self):
+        from tracker.gui import Window
+
+        with tempfile.TemporaryDirectory() as tmp:
+            w = Window(Path(tmp) / "gui.sqlite")
+            try:
+                context = (w.source_epoch, w.sid, "video", "fixture")
+                w.analysis_busy = True
+                w.analysis_request.emit(context, np.zeros((100, 100, 3), np.uint8), 0.0)
+                self.wait(lambda: not w.analysis_busy)
+                self.assertIn("Aucune estimation fiable", w.track_status.text())
+            finally:
+                w.close()
+                self.app.processEvents()
+
+    def test_capture_continues_without_ack_and_recovers_after_ui_pause(self):
+        from tracker.gui import Window
+
+        class FakeScreen:
+            monitors = [dict(left=0, top=0, width=640, height=360)]
+
+            def __init__(self):
+                self.count = 0
+                self.closed = False
+                self.threads = []
+
+            def grab(self, region):
+                from threading import get_ident
+                self.threads.append(get_ident())
+                self.count += 1
+                return np.full((360, 640, 4), self.count % 256, np.uint8)
+
+            def close(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as tmp:
+            w = Window(Path(tmp) / "gui.sqlite")
+            try:
+                with (
+                    patch(
+                        "tracker.capture.client_region",
+                        return_value=dict(left=0, top=0, width=640, height=360),
+                    ),
+                    patch("mss.mss", side_effect=FakeScreen) as make_screen,
+                ):
+                    w.capture_active = True
+                    w.start_capture_signal.emit(101, 10)
+                    self.wait(lambda: w.live_image.image is not None)
+                    self.assertIn("640 × 360", w.capture_status.text())
+                    self.wait(lambda: w.capture_count >= 5)
+                    screen = w.capture_worker.screen
+                    self.assertEqual(w.live_image.image.pixelColor(0, 0).red(), screen.count % 256)
+                    from threading import get_ident
+                    self.assertTrue(all(t != get_ident() for t in screen.threads))
+                    before = screen.count
+                    # Simulate a busy UI: capture must continue independently.
+                    time.sleep(0.4)
+                    self.assertGreaterEqual(screen.count, before + 2)
+                    newest = screen.count
+                    self.app.processEvents()
+                    self.assertGreaterEqual(w.live_image.image.pixelColor(0, 0).red(), newest)
+                    w.stop_capture()
+                    self.wait(lambda: w.capture_worker.screen is None)
+                    stopped_count = w.capture_count
+                    time.sleep(0.15)
+                    self.app.processEvents()
+                    self.assertEqual(w.capture_count, stopped_count)
+                    w.capture_active = True
+                    w.start_capture_signal.emit(101, 30)
+                    self.wait(lambda: w.capture_count >= stopped_count + 3)
+                    w.stop_capture()
+                    self.wait(lambda: w.capture_worker.screen is None)
+            finally:
+                w.close()
+                self.app.processEvents()

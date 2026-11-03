@@ -1,0 +1,22 @@
+test_incremental_undo_reset_and_period (test_engine.EngineTests.test_incremental_undo_reset_and_period) ... ok
+test_money_roi_drawdown_streaks (test_engine.EngineTests.test_money_roi_drawdown_streaks) ... ok
+test_monte_carlo_reproducibility_and_maximum (test_engine.EngineTests.test_monte_carlo_reproducibility_and_maximum) ... ok
+test_no_future_leak (test_engine.EngineTests.test_no_future_leak) ... ok
+test_scanner (test_engine.EngineTests.test_scanner) ... ok
+test_sectors (test_engine.EngineTests.test_sectors) ... ok
+test_selections_always_19 (test_engine.EngineTests.test_selections_always_19) ... ok
+test_ties_empty_and_rules (test_engine.EngineTests.test_ties_empty_and_rules) ... ok
+test_validation (test_engine.EngineTests.test_validation) ... ok
+test_wheel (test_engine.EngineTests.test_wheel) ... ok
+test_entry_clicks_selection_ledger_and_undo (test_gui.GuiTests.test_entry_clicks_selection_ledger_and_undo) ... ok
+test_import_export_sessions_confirm_and_monte_carlo (test_gui.GuiTests.test_import_export_sessions_confirm_and_monte_carlo) ... ok
+test_invalid_stake_does_not_consume_input (test_gui.GuiTests.test_invalid_stake_does_not_consume_input) ... ok
+test_corruption_preserved (test_storage.StorageTests.test_corruption_preserved) ... ok
+test_csv_invalid_transaction (test_storage.StorageTests.test_csv_invalid_transaction) ... ok
+test_csv_roundtrip (test_storage.StorageTests.test_csv_roundtrip) ... ok
+test_sessions_atomic_and_restore (test_storage.StorageTests.test_sessions_atomic_and_restore) ... ok
+
+----------------------------------------------------------------------
+Ran 17 tests in 1.698s
+
+OK

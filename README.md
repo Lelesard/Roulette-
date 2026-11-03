@@ -1,138 +1,117 @@
-# ROULETTE ANALYZER 19 PRO — ÉDITION PROFESSIONNELLE
+# Tracker Roulette local — Windows 11
 
-Application de bureau en français pour la roulette européenne. Python, Tkinter/ttk, bibliothèque standard uniquement. Utilisable hors connexion ; aucune connexion à un casino, aucune mise réelle.
+Application de bureau en français : Python 3.11/3.12, PySide6, OpenCV, NumPy, MSS et SQLite. Source et traitements locaux, sans abonnement. Aucune connexion applicative au casino, aucun identifiant demandé, aucune mise automatique.
 
-Le dépôt initial était vide et aucun ancien programme Python n’a été fourni. Cette version est une nouvelle implémentation du cahier des charges, sans prétendre avoir repris un logiciel existant.
+Le **Lot A est implémenté**. Les ajouts OCR, recherche de candidat bille et modèle physique sont **expérimentaux et partiels**. La capture Win32 est codée mais n’a pas été essayée sur Windows dans cet environnement Linux. Aucun taux de prédiction réel n’est établi. Voir `VALIDATION_TRACKER.md` pour le périmètre exact.
 
-## Lancer sous Windows 11
+## Démarrage Windows
 
-1. Installer **Python 3.12** depuis python.org, avec le lanceur Python et Tcl/Tk (inclus dans l’installation standard).
-2. Extraire **tout** le ZIP dans un dossier accessible en écriture. Ne pas lancer le programme à l’intérieur de l’archive.
-3. Double-cliquer sur `Lancer_Roulette.bat`, ou ouvrir un terminal dans ce dossier :
+1. Installer Python **3.11 ou 3.12, 64 bits**, avec le lanceur `py`.
+2. Extraire le projet dans un dossier accessible en écriture.
+3. Double-cliquer sur `installer_windows.bat`. Internet est nécessaire pour télécharger les dépendances à cette étape.
+4. Double-cliquer sur `lancer_tracker.bat`. L’application fonctionne ensuite localement.
 
-```powershell
-py -3.12 main.py
-```
-
-Aucun `pip install` n’est nécessaire. Vérifier Tkinter en cas de problème : `py -3.12 -m tkinter` doit ouvrir une petite fenêtre.
-
-Sous Linux, utiliser un Python disposant de Tkinter et une session graphique : `python3 main.py`. Dans l’environnement cloud fourni, `/usr/bin/python3 main.py` utilise Tk 8.6 ; le Python 3.12 fourni par le runtime utilise Tk 9 et présente un défaut de rendu des polices/caractères sur ce serveur X. Les calculs sont testés avec les deux interpréteurs. Tk 8.6 est donc préféré pour l’affichage Linux. Le logiciel reste destiné à Python 3.12/Tkinter sous Windows.
-
-## Tableau de bord
-
-- Cliquer sur le tapis ou sur une case du cylindre, ou saisir un entier **0–36** puis Entrée. Chaque clic ajoute un tirage ; utiliser **Annuler** en cas de doublon accidentel.
-- Le tapis suit la disposition européenne : colonnes 1/2/3 à 34/35/36 et zéro sur trois rangées. La roue respecte l’ordre réel des 37 cases.
-- Le contour cyan désigne les 19 numéros sélectionnés pour le prochain tour. Le point orange sur le tapis et le grand numéro central repèrent le dernier résultat. L’anneau orange désigne le secteur historique maximal ; les indications × signalent les répétitions sur les 20 derniers tours.
-- Choisir la stratégie dans le scanner ou cliquer sur sa ligne dans le comparateur.
-- **Fenêtre de sélection** : 20, 50, 100 ou 200 résultats précédents utilisés pour calculer les sélections. Avant que la fenêtre soit remplie, tous les résultats disponibles sont utilisés.
-- **Période évaluée** : 20, 50, 100, 200 derniers tours, ou toute la session. Le contexte plus ancien est conservé pour sélectionner les numéros de chacun des tours évalués.
-- Modifier la mise par numéro, puis Entrée. Le comparateur est un **rejeu historique à mise constante**, recalculé avec les paramètres actuels. Les séries et le drawdown sont réinitialisés au début de la période évaluée ; ils ne se prolongent pas en dehors de celle-ci.
-- Cocher **Enregistrer les mises virtuelles** pour journaliser, avant chaque nouvelle saisie, la stratégie choisie, la fenêtre, les 19 numéros et la mise du moment. Désactiver cette option suspend uniquement ce journal ; les analyses historiques restent disponibles. Changer les paramètres ne réécrit pas le journal. Annuler un tirage retire son éventuelle mise. Un import CSV n’invente pas de mises passées.
-- Le panneau **Analyses détaillées** contient les 37 secteurs, les absences/intervalles, Monte-Carlo et le journal virtuel. C’est un instantané à l’ouverture ; fermer et rouvrir pour actualiser les tableaux détaillés. Monte-Carlo prend un nouvel instantané au lancement.
-- Les trois zones principales restent côte à côte. Sur un petit écran, faire défiler verticalement le tableau de bord pour accéder au comparateur et aux informations du bas. Largeur minimale : 980 pixels.
-
-## Règles reproductibles des sept stratégies
-
-L’ordre du cylindre est le départage commun, en commençant par le zéro. Chaque sélection contient toujours exactement 19 numéros distincts.
-
-| Stratégie | Définition |
-|---|---|
-| 19 voisins fixes | Les 19 cases dans le sens de l’ordre du cylindre, zéro inclus au départ. |
-| 19 chauds | Fréquences décroissantes dans la fenêtre. |
-| 19 froids | Fréquences croissantes, y compris les numéros non observés. |
-| 10 chauds + 9 froids | Dix premiers chauds, puis neuf premiers froids qui n’y figurent pas. |
-| 19 voisins fréquents | Maximum des 37 secteurs de 19 cases ; égalité départagée par l’ordre de leur case de départ. |
-| 19 retours rapides | Moyenne des intervalles de réapparition croissante. Un numéro sans au moins deux apparitions a un score infini ; il complète la sélection après les numéros documentés. Aucune périodicité prédictive n’est supposée. |
-| 19 voisins du dernier | Dernier résultat, ses neuf voisins de chaque côté. Sans résultat : secteur fixe partant du zéro. |
-
-Historique vide : les sept stratégies retournent le secteur fixe. Fréquences égales ou intervalles moyens égaux : ordre du cylindre. La référence aléatoire sélectionne 19 cases sans remise à chaque tour, avec la graine fixe 19037. C’est une seule trajectoire de comparaison, pas une distribution de significativité.
-
-## Calculs et absence de données futures
-
-Pour le tour `i`, la sélection est calculée uniquement sur les résultats **strictement antérieurs** à `i`. Le résultat `i` est ensuite évalué et ajouté à l’historique. Les sélections de chaque stratégie sont conservées par l’évaluateur en mémoire ; le journal des saisies conserve aussi les paramètres originaux sur disque.
-
-Une mise de `m` euros par numéro engage `19m` : touche = `+17m` nets, raté = `−19m`. Le ROI est `100 × solde / mises cumulées`, zéro s’il n’y a pas de mises. Le drawdown maximal est la plus forte baisse depuis un sommet du solde, en incluant le capital de départ zéro. Le capital est virtuel et peut devenir négatif ; aucune contrainte de bankroll ou progression de mises n’est simulée.
-
-À roulette équitable, P(touche) = 19/37 et l’espérance est −1/37 des sommes engagées (environ −2,70 %). Une sélection historique ne garantit pas le résultat suivant.
-
-Le scanner de répétitions utilise la session entière :
-
-- Une réapparition est comptée une fois par nouveau résultat à partir de sa précédente apparition. Les retours ≤ 5 et ≤ 10 incluent les répétitions immédiates.
-- L’intervalle compte les tours entre les indices de deux apparitions : deux résultats consécutifs ont un intervalle de 1.
-- Une absence est le nombre de tours depuis la dernière apparition : zéro pour le dernier résultat. « Jamais observé » est une durée censurée égale à la taille de la session.
-- Une série sans répétition est une suite contiguë de numéros tous différents.
-- Les cycles affichent les intervalles constatés, leur moyenne et leur écart-type population ; aucun modèle périodique n’est inféré.
-
-Les secteurs affichent comptes, fréquences et écarts en points par rapport à 19/37. Les horizons 20/50/100/200 sont tronqués si la session est plus courte ; les dénominateurs sont affichés.
-
-## Comparaison Monte-Carlo
-
-Choisir une mesure, la fenêtre ou la session entière, 500/2 000/10 000 simulations et une graine entière. Chaque simulation génère une série uniforme indépendante de même taille et applique la même mesure. **Le maximum parmi les 37 secteurs est recalculé pour chaque série** : il ne s’agit pas de tester un secteur choisi après coup comme s’il était fixé à l’avance.
-
-Mesures disponibles : concentration maximale, répétitions immédiates, retours ≤ 5/10, plus grand intervalle, plus longue série sans répétition, absence maximale et faible diversité sur les 37 derniers résultats. Sont affichés observation, moyenne simulée, percentile avec demi-poids des égalités, compte des cas au moins aussi extrêmes et p Monte-Carlo `(cas + 1)/(simulations + 1)`. La faible diversité utilise la queue inférieure ; les autres mesures la queue supérieure. Le minimum observable de cette p dépend du nombre de simulations.
-
-Les simulations peuvent être annulées ; aucun résultat partiel n’est présenté. Le fil de calcul ne manipule aucun widget. Les mesures non testées restent descriptives. Il n’y a pas de correction globale pour l’exploration de plusieurs mesures ou fenêtres, ni d’intervalle de confiance pour la p estimée. Une rareté ne suffit pas à démontrer un biais et ne fournit pas de signal pour miser. Une confirmation sur une nouvelle série indépendante est nécessaire.
-
-## Sessions, sauvegardes et CSV
-
-Sauvegarde automatique après chaque modification et à la fermeture :
-
-- Windows : `%LOCALAPPDATA%\RouletteAnalyzer19Pro\sessions.json`.
-- Linux : `~/.local/share/RouletteAnalyzer19Pro/sessions.json`.
-- Emplacement personnalisable par `ROULETTE19_DATA_DIR`.
-
-Les noms de session, résultats et journaux de mises sont conservés. Les paramètres d’affichage reviennent à leurs valeurs par défaut au lancement. La sauvegarde JSON utilise un fichier temporaire, un flush disque et un remplacement atomique. Le logiciel ne doit être ouvert qu’en **une instance par dossier de données** : pas de fusion ou de verrou interprocessus.
-
-Une sauvegarde corrompue n’est pas écrasée automatiquement : le démarrage échoue avec une explication. Sauvegarder le fichier endommagé ailleurs puis restaurer une copie connue ou le déplacer pour repartir d’une session vide. Sauvegarder régulièrement tout le dossier de données sur un autre support.
-
-Le journal d’erreurs `errors.log` se trouve dans le même dossier (rotation 2 Mo, deux copies). Une erreur d’écriture est signalée ; exporter alors les tirages en CSV avant de quitter.
-
-**CSV** : UTF-8 avec ou sans BOM, une seule colonne, en-tête facultatif `numero`, `numéro` ou `number`, ordre du plus ancien au plus récent. Un entier de 0 à 36 par ligne. L’import est entièrement validé avant de créer une nouvelle session, sans toucher aux sessions existantes. L’export contient les tirages, pas le journal ni les paramètres ; sauvegarder le JSON pour tout conserver. **Effacer** nécessite une confirmation et vide uniquement la session active.
-
-Exemple :
-
-```csv
-numero
-0
-32
-15
-19
-36
-```
-
-## Tests
-
-Dans le dossier du projet :
+Installation équivalente dans PowerShell, depuis le dossier du projet :
 
 ```powershell
-py -3.12 -m unittest discover -v
+py -3.12 -m venv .venv-windows
+.\.venv-windows\Scripts\python.exe -m pip install -r requirements-tracker.txt
+.\.venv-windows\Scripts\python.exe tracker_main.py
 ```
 
-Sous Linux : `python3 -m unittest discover -v`. Les tests de l’interface sont explicitement ignorés si aucun écran n’est disponible. Avec Xvfb : `xvfb-run -a /usr/bin/python3 -m unittest discover -v`.
+Le script d’installation et le script de compilation essaient Python 3.11 si Python 3.12 est absent. Le code a été exécuté ici avec Python 3.12 ; la configuration 3.11 reste à vérifier.
 
-Les tests vérifient l’ordre réel des cases, les sept sélections, les égalités/historiques vides, gains/ROI/drawdown/séries, l’absence de fuite future, les annulations/recalculs, scanners/secteurs, CSV, sauvegarde/restauration et corruption, Monte-Carlo et graines reproductibles. Les tests GUI exercent saisie/clics, journal préalable, import/export, sessions, confirmation d’effacement, paramètres, simulation en arrière-plan et redimensionnement.
+## Utilisation
 
-Voir `VALIDATION.md` pour les résultats observés et les limites de validation. Aucun test Windows ni exécutable Windows n’a été réalisé dans ce conteneur Linux.
+### Sessions et profils
 
-## Fabriquer un exécutable Windows
+Les neuf onglets sont Direct, Racetrack, Historique, Bankroll, Statistiques, Vidéos et tests, Tables et profils, Paramètres et Diagnostics. Les pages peuvent défiler sur un petit écran. Les boutons principaux ont une hauteur adaptée à une utilisation tactile ; l’ergonomie sur Legion Go doit être confirmée sur l’appareil.
 
-À faire **sur Windows 11**, dans le dossier du projet, avec Python 3.12. PyInstaller est une dépendance de construction facultative ; l’application elle-même n’en a pas besoin.
+Créer une session pour chaque table et période de travail. Les profils Deutsches Roulette et VIP Roulette sont précréés. Un profil contient les régions calibrées, le sens de lecture OCR et une note ; **aucun calibrage physique de ces tables n’est fourni**. Le nom de table d’une session ne change pas après création. Pour changer de table, créer une autre session. Les mises en attente de chaque session sont conservées séparément.
+
+### Direct : capture visible de Brave
+
+Sur Windows, ouvrir Brave avec la table visible, cliquer sur **Actualiser Brave**, choisir la fenêtre et démarrer. L’identification vérifie le processus `brave.exe`, pas seulement son titre. La capture MSS lit les pixels du bureau dans la zone cliente de la fenêtre. Elle ne lit ni le réseau ni le contenu interne du navigateur.
+
+Garder Brave visible à côté du tracker et entièrement dans les écrans. Une autre fenêtre placée devant Brave sera présente dans la capture. Une fenêtre minimisée, fermée ou hors écran arrête la capture. Une vidéo protégée peut produire une image noire : aucune tentative de contournement n’est prévue. FPS et latence concernent la capture logicielle, pas le délai de diffusion du casino.
+
+Cliquer sur **Calibrer le cylindre** puis tracer un rectangle sur l’aperçu. Pour le module vidéo expérimental, ce rectangle doit encadrer précisément l’ellipse du cylindre, sans marges inutiles. Calibrer séparément le panneau des résultats. Les régions sont sauvegardées par profil, en coordonnées relatives. **Recalibrer après un changement de caméra, de zoom ou de disposition, et lors du passage entre vidéo et Brave.** Un rectangle ne corrige pas une perspective projective complexe.
+
+Le tableau de bord affiche derniers résultats, bankroll, jeton, mises en attente et dernier règlement déclaré. Bille, rotor et fermeture des mises ne sont pas mesurés en direct. Le message reste **« Aucune estimation fiable »**.
+
+### Racetrack, jetons et règlement
+
+L’ordre des 37 cases est celui de la roulette européenne, zéro en haut, progression horaire. Cliquer sur un numéro pour choisir ses 9, 15 ou 19 voisins contigus. Cyan : sélection manuelle ; ◆ : plein déclaré ; ● : dernier résultat. Une sélection manuelle n’est pas une estimation.
+
+Valeurs proposées : 0,10 €, 0,50 € et 1 €. Toute valeur positive au centime est acceptée. Le nombre de jetons s’applique à chaque cible. Chaque ajout fige son montant en centimes : changer ensuite le jeton ne modifie pas les mises précédentes. Ajouter un plein, toute une zone, une chance simple, une douzaine ou une colonne. Les mises du casino restent à effectuer manuellement.
+
+Saisir le résultat observé puis **Enregistrer et régler le tour**. Le retour brut d’un plein gagnant est 36 fois sa mise ; celui d’une chance simple 2 fois ; celui d’une douzaine ou colonne 3 fois. Le profit net du tour est la somme des retours bruts moins toutes les mises du tour. Le zéro perd sur toutes les chances simples, douzaines et colonnes ; les variantes « partage » et « prison » ne sont pas prises en charge.
+
+Sans mise déclarée, l’ajout d’un résultat ne crée aucun mouvement financier. Le solde affiché est celui des tours réglés ; les mises en attente sont affichées séparément. Le règlement du tour et la suppression des mises en attente sont atomiques en SQLite. La fermeture conserve les mises non réglées pour la prochaine ouverture.
+
+### Historique et statistiques
+
+Historique paginé par 100 résultats, correction, suppression, import et export CSV/JSON. Corriger un résultat recalcule son règlement actif ; le supprimer annule ce règlement. L’audit conserve la modification. L’export ajoute couleur, parité, manque/passe (`hauteur`), douzaine, colonne et position dans le cylindre (0 à 36). La position dans le cylindre est une propriété descriptive, pas une zone prédite.
+
+CSV : en-tête `number`, `numero` ou `numéro`. JSON : liste d’objets avec `number`. Le champ `created` est facultatif ; s’il est présent, il doit être au format ISO 8601 avec fuseau. Les exports préservent les dates lors d’une réimportation. Si la date manque, l’heure d’import UTC est utilisée. Tout le fichier est validé avant écriture. Les imports manuels sont additifs : **réimporter le même fichier crée des répétitions**. Les mises et opérations financières ne font pas partie des exports de résultats.
+
+Statistiques : effectifs, fréquences, histogramme, séries actuelles et longueurs maximales par propriété. Le Racetrack permet de consulter les voisins. Les fréquences historiques ne prédisent pas une roulette équilibrée.
+
+### Bankroll et sauvegarde
+
+Enregistrer le capital initial, puis les dépôts, retraits ou ajustements signés. Ces flux n’entrent pas dans le bénéfice des tours ni dans le ROI. L’affichage distingue engagé, retours bruts, résultat net, sommes des tours bénéficiaires et pertes nettes des tours déficitaires. Le graphique montre le solde après chaque opération. Les opérations annulées restent visibles sans contribuer au solde. Pour corriger une opération de trésorerie, l’annuler puis saisir son remplacement avec un motif.
+
+Le cumul additionne les soldes des sessions : **ne pas ressaisir plusieurs fois le même capital pour représenter une bankroll unique**. La limite de perte nette par session se règle en euros dans Paramètres ; zéro la désactive. Une alerte colore le solde et apparaît dans Diagnostics. Elle ne bloque pas les saisies.
+
+Données Windows : `%LOCALAPPDATA%\RouletteTracker\tracker.sqlite3`. Sous Linux : `~/.local/share/RouletteTracker/tracker.sqlite3`. Écritures validées à chaque action. **Diagnostics → Sauvegarder toute la base SQLite** réalise une sauvegarde cohérente incluant sessions, mises en attente, profils, paramètres, historique, annotations et audit. Pour restaurer, fermer l’application, conserver une copie de la base actuelle puis remplacer celle-ci par la sauvegarde. Ne pas partager une base entre plusieurs instances.
+
+### Vidéos et tests
+
+Ouvrir MP4/AVI/MOV/MKV, lire, mettre en pause, choisir 0,25×, 0,5×, 1× ou 2×, avancer d’une image ou déplacer le curseur temporel. Le décodage se fait dans un QThread, avec un seul décodage demandé à la fois. Les recherches dépendent des codecs OpenCV. Les annotations sont enregistrées au temps de la vidéo et retrouvées au même chemin de fichier. Déplacer le curseur désactive l’OCR pour éviter une réimportation involontaire du passé.
+
+### OCR facultatif — Lot B expérimental
+
+Installer séparément Tesseract OCR sur Windows, puis indiquer `tesseract.exe` dans Paramètres ou le rendre accessible par le PATH. Aucune langue supplémentaire n’est nécessaire pour les chiffres. Tesseract n’est pas inclus dans l’EXE. Calibrer uniquement les numéros du panneau, sans compte à rebours ni montants. Indiquer le sens de lecture puis activer l’analyse.
+
+L’outil exige au moins trois nombres distinctement segmentés, chacun avec un score OCR d’au moins 85 %, et deux lectures concordantes espacées. Ce score n’est pas une probabilité de lecture correcte. Par défaut, valider la proposition dans Paramètres. Un mode d’ajout automatique est activable pour la session de travail.
+
+Les nouveaux numéros sont déduits d’un recoupement d’au moins trois positions avec le panneau précédent ; le curseur de dédoublonnage est sauvegardé avec les ajouts. Un panneau inchangé n’ajoute rien. Des résultats identiques consécutifs sont préservés si le décalage du reste du panneau est identifiable. Une répétition parfaitement indiscernable, un recoupement ambigu ou un échec OCR n’est jamais inventé : vérifier et saisir manuellement. Si l’historique de session contient déjà des résultats, ils servent de référence au premier recoupement. **L’OCR reste sujet à des erreurs et omissions sur les vrais panneaux**. Il ne règle pas les mises en attente ; un résultat OCR n’est pas une preuve de gain.
+
+### Candidat bille et modèle — Lots C et D partiels
+
+Activer dans Paramètres la recherche de candidat bille sur les **vidéos uniquement**. Un détecteur léger cherche un point clair contrasté dans l’anneau extérieur de l’ellipse calibrée, rejette les candidats multiples, ajuste l’angle déroulé dans le temps, affiche vitesse et accélération angulaires et marque le point retenu. Le score mesure la continuité du candidat, pas son identité. Les reflets, mouvements de caméra et aliasings restent des causes d’échec. Une coupure importante, une recherche temporelle, une perte ou un changement de dimensions réinitialise les mesures. La détection de changement de caméra est une heuristique et peut manquer des zooms ou des coupes.
+
+Aucun détecteur IA, repérage automatique d’ellipse, suivi indépendant du rotor ni détection de fermeture des mises n’est implémenté. `tracker/evaluation.py` contient un modèle physique hors ligne exigeant des mesures de rotor et paramètres préalablement calibrés. Il refuse les états insuffisants ou postérieurs à la fermeture. **Ce modèle n’est pas branché sur une recommandation en direct**. Son principe et son protocole sont décrits dans `VALIDATION_TRACKER.md`.
+
+## Tests et compilation Windows
 
 ```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install pyinstaller
-.\.venv\Scripts\python.exe -m unittest discover -v
-.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onefile --windowed --name RouletteAnalyzer19Pro main.py
+.\.venv-windows\Scripts\python.exe -m unittest discover -s tests_tracker -v
+.\.venv-windows\Scripts\python.exe tracker_main.py --smoke-test
 ```
 
-Le résultat sera `dist\RouletteAnalyzer19Pro.exe`. Tester manuellement sur Windows : lancement, clics/saisie, fermeture/réouverture, CSV accentué, sessions, écran plus petit, Monte-Carlo/annulation et permissions de sauvegarde. Le fichier n’est pas signé ; une distribution publique peut nécessiter une signature et un installateur. Aucun `.exe` n’est livré ou présenté comme testé ici.
+`build_windows.bat` installe les dépendances, exécute les tests, construit avec PyInstaller puis ouvre et ferme l’application générée avec une base temporaire. Résultat attendu : `dist\RouletteTracker\RouletteTracker.exe`. **Distribuer tout le dossier `RouletteTracker`**, pas uniquement l’EXE. Construction sur Windows obligatoire ; aucun EXE Windows n’a été compilé depuis Linux. L’exécutable n’est pas signé. Le fichier `.github/workflows/tracker-windows.yml` propose également un build Windows à déclenchement manuel ; il n’a pas été lancé ici.
 
-## Organisation
+Sous Linux, pour le développement vidéo et comptable :
 
-- `main.py` et `Lancer_Roulette.bat` : lancement.
-- `roulette19/gui.py` : interface, événements et files de communication des calculs.
-- `roulette19/engine.py` : stratégies, scanner, secteurs, comparateur et Monte-Carlo.
-- `roulette19/storage.py` : sessions et CSV.
-- `tests/` : tests standard `unittest`.
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-tracker.txt
+QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest discover -s tests_tracker -v
+QT_QPA_PLATFORM=offscreen .venv/bin/python tracker_main.py --smoke-test
+```
 
-Aucun fichier de données personnelles n’est livré. Aucun module du programme n’exige un accès Internet.
+## Architecture extensible
+
+- `domain.py` : ordre, voisins, propriétés, monnaie en centimes et paiements.
+- `storage.py` : transactions, sessions, mises, opérations, audit, profils et curseurs OCR.
+- `gui.py`, `widgets.py`, `live.py` : interface Qt, aperçus, sélection de régions et graphiques.
+- `video.py` : décodage asynchrone OpenCV.
+- `capture.py` : identification Brave Win32, capture visible MSS, contrôle de débit.
+- `ocr.py` : Tesseract dans un worker et recoupement de panneaux.
+- `vision.py` : contrat d’extension `OfflineAnalyzer` / `Observation`, détecteur neutre par défaut.
+- `experimental.py` : candidat bille hors ligne ; aucun rotor simulé.
+- `evaluation.py` : modèle physique gardé et évaluation chronologique de secteurs.
+- `benchmark.py` : mesures de localisation sur frames annotées indépendamment.
+
+Les traitements vidéo, capture, OCR et analyse ont chacun leur QThread. Les retours graphiques passent par des slots Qt de la fenêtre ; SQLite reste dans le fil de l’interface. Les files de travail sont bornées à une demande en cours par traitement. Les nouvelles caméras et détecteurs peuvent être ajoutés sans changer les règles financières.
