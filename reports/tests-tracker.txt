@@ -3,6 +3,7 @@ test_capture_continues_without_ack_and_recovers_after_ui_pause (test_extensions.
 test_capture_watchdog_and_log_identify_stalled_stream (test_extensions.DesktopTests.test_capture_watchdog_and_log_identify_stalled_stream) ... ok
 test_manual_roi_touch_and_profile_persistence (test_extensions.DesktopTests.test_manual_roi_touch_and_profile_persistence) ... This plugin does not support propagateSizeHints()
 ok
+test_mss_thread_local_resources_survive_frames_stop_and_restart (test_extensions.DesktopTests.test_mss_thread_local_resources_survive_frames_stop_and_restart) ... ok
 test_ocr_worker_is_queued_and_stale_context_is_ignored (test_extensions.DesktopTests.test_ocr_worker_is_queued_and_stale_context_is_ignored) ... ok
 test_preview_exception_is_logged_and_reported (test_extensions.DesktopTests.test_preview_exception_is_logged_and_reported) ... ok
 test_benchmark_requires_annotations_and_does_not_invent_rates (test_extensions.EvaluationTests.test_benchmark_requires_annotations_and_does_not_invent_rates) ... ok
@@ -26,6 +27,6 @@ test_import_atomic_export_and_pagination (test_tracker.StorageTests.test_import_
 test_void_audit_and_session_isolation (test_tracker.StorageTests.test_void_audit_and_session_isolation) ... ok
 
 ----------------------------------------------------------------------
-Ran 24 tests in 1.830s
+Ran 25 tests in 2.347s
 
 OK

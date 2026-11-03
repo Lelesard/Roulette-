@@ -372,7 +372,7 @@ class DesktopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             w = Window(Path(tmp) / "gui.sqlite")
             try:
-                self.assertIn("diagnostic v2", w.windowTitle())
+                self.assertIn("corrigée v3", w.windowTitle())
                 w.capture_active = True
                 w.capture_started_at = time.monotonic() - 4
                 w.poll_capture()
@@ -401,6 +401,69 @@ class DesktopTests(unittest.TestCase):
                 self.assertFalse(w.capture_active)
                 self.assertIn("fixture display failure", w.capture_status.text())
                 self.assertIn("ui.preview_failure", w.capture_log_path.read_text())
+            finally:
+                w.close()
+                self.app.processEvents()
+
+    def test_mss_thread_local_resources_survive_frames_stop_and_restart(self):
+        from tracker.gui import Window
+        from threading import local, current_thread
+        screens = []
+        class ThreadLocalScreen:
+            monitors = [dict(left=0, top=0, width=64, height=48)]
+            def __init__(self):
+                self.handles = local()
+                self.handles.srcdc = object()
+                self.handles.bmp = object()
+                self.owner = current_thread()
+                self.frames = 0
+                self.closed = False
+                self.fail_after = None
+                screens.append(self)
+            def grab(self, region):
+                # Models MSS Windows' thread-local HDC and bitmap handles.
+                self.handles.srcdc
+                if current_thread() is not self.owner:
+                    raise AssertionError("MSS thread changed")
+                if self.fail_after is not None and self.frames >= self.fail_after:
+                    raise RuntimeError("simulated Windows acquisition failure")
+                self.frames += 1
+                return np.full((48, 64, 4), self.frames, np.uint8)
+            def close(self):
+                self.handles.bmp
+                if current_thread() is not self.owner:
+                    raise AssertionError("MSS close thread changed")
+                self.closed = True
+        with tempfile.TemporaryDirectory() as tmp:
+            w = Window(Path(tmp) / "gui.sqlite")
+            errors = []
+            w.capture_worker.error.connect(errors.append)
+            try:
+                with patch("tracker.capture.client_region", return_value=dict(left=0, top=0, width=64, height=48)), patch("mss.mss", side_effect=ThreadLocalScreen):
+                    for run in range(2):
+                        w.capture_active = True
+                        w.start_capture_signal.emit(101, 30)
+                        self.wait(lambda: len(screens) == run + 1 and screens[-1].frames >= 5)
+                        self.wait(lambda: w.live_image.image is not None)
+                        w.stop_capture()
+                        self.wait(lambda: screens[-1].closed)
+                        self.wait(lambda: not screens[-1].owner.is_alive())
+                    self.assertEqual(errors, [])
+                    w.capture_active = True
+                    w.start_capture_signal.emit(101, 30)
+                    self.wait(lambda: len(screens) == 3 and screens[-1].frames >= 2)
+                    screens[-1].fail_after = screens[-1].frames
+                    self.wait(lambda: bool(errors))
+                    self.wait(lambda: screens[-1].closed)
+                    self.assertIn("simulated Windows acquisition failure", errors[0])
+                    self.assertTrue(all(s.closed for s in screens))
+                    # A failure must not poison subsequent starts or cleanup.
+                    w.capture_active = True
+                    w.start_capture_signal.emit(101, 30)
+                    self.wait(lambda: len(screens) == 4 and screens[-1].frames >= 3)
+                    w.stop_capture()
+                    self.wait(lambda: screens[-1].closed)
+                    self.assertEqual(len(errors), 1)
             finally:
                 w.close()
                 self.app.processEvents()

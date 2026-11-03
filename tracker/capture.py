@@ -4,13 +4,13 @@ import ctypes
 import os
 import time
 import logging
-from threading import Lock
+from threading import Event, Lock, Thread, current_thread, get_ident
 from ctypes import wintypes
 from dataclasses import dataclass
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QObject, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, Signal, Slot
 from PySide6.QtGui import QImage
 
 
@@ -143,77 +143,98 @@ class CaptureWorker(QObject):
     def __init__(self):
         super().__init__()
         self.log = logging.getLogger("roulette.capture")
-        self.timer = None
         self.screen = None
         self.handle = 0
         self._lock = Lock()
         self._latest = None
+        self._thread = None
+        self._cancel = Event()
+        self._owner = None
 
     @Slot(object, int)
     def start(self, handle, fps):
         self.stop()
-        self.log.info("capture.start fps=%s", fps)
+        if self._thread is not None and self._thread.is_alive():
+            self.error.emit("La capture précédente ne répond pas encore. Fermez le Tracker avant de réessayer.")
+            return
+        self.handle = handle
+        self._cancel = Event()
+        self._thread = Thread(
+            target=self._capture_loop, args=(handle, fps, self._cancel),
+            name="RouletteScreenCapture", daemon=True,
+        )
+        self._thread.start()
+
+    def _capture_loop(self, handle, fps, cancel):
+        # Keep a live Python stack for the entire MSS lifetime. Qt callbacks can
+        # run with transient Python thread states: an equal native thread ID is
+        # not sufficient to preserve MSS's threading.local Windows handles.
+        self._owner = get_ident()
+        interval = 1 / max(1, min(30, fps))
+        self.log.info("capture.start fps=%s owner=%s", fps, self._owner)
         try:
             import mss
-
             client_region(handle)
-            self.handle = handle
             self.screen = mss.mss()
-            self.timer = QTimer(self)
-            self.timer.timeout.connect(self.grab)
-            self.timer.start(max(1, round(1000 / max(1, min(30, fps)))))
-            self.log.info("capture.timer active=%s interval=%s", self.timer.isActive(), self.timer.interval())
-            self.grab()
+            while not cancel.is_set():
+                started = time.monotonic()
+                self.grab()
+                cancel.wait(max(0, interval - (time.monotonic() - started)))
         except Exception as exc:
             self.log.exception("capture.failure")
-            self.stop()
             self.error.emit(str(exc))
-
-    @Slot()
-    def grab(self):
-        try:
-            started = time.perf_counter()
-            self.log.info("capture.region.begin")
-            region = client_region(self.handle)
-            desktop = self.screen.monitors[0]
-            if (
-                region["left"] < desktop["left"]
-                or region["top"] < desktop["top"]
-                or region["left"] + region["width"] > desktop["left"] + desktop["width"]
-                or region["top"] + region["height"] > desktop["top"] + desktop["height"]
-            ):
-                raise RuntimeError(
-                    "Gardez toute la fenêtre Brave dans les écrans visibles."
-                )
-            self.log.info("capture.grab.begin width=%s height=%s", region["width"], region["height"])
-            frame = np.array(self.screen.grab(region))[:, :, :3].copy()
-            self.log.info("capture.grab.end")
-            packet = (frame, time.monotonic(), (time.perf_counter() - started) * 1000)
-            # One replaceable image: capture never waits for the GUI and cannot
-            # accumulate a queue of stale frames when the GUI is temporarily busy.
+        finally:
+            # Close on the same persistent Python thread, including failures.
+            screen, self.screen = self.screen, None
+            if screen is not None:
+                try:
+                    screen.close()
+                except Exception as exc:
+                    self.log.exception("capture.close_failure")
+                    self.error.emit("Fermeture de la capture : " + str(exc))
             with self._lock:
-                self._latest = packet
-            self.log.info("capture.published")
-        except Exception as exc:
-            self.log.exception("capture.failure")
-            self.stop()
-            self.error.emit(str(exc))
+                self._latest = None
+            self.log.info("capture.stopped owner=%s", self._owner)
+            self._owner = None
+            self.stopped.emit()
+
+    def grab(self):
+        if get_ident() != self._owner:
+            raise RuntimeError("Capture appelée hors du thread propriétaire MSS.")
+        started = time.perf_counter()
+        self.log.info("capture.region.begin")
+        region = client_region(self.handle)
+        desktop = self.screen.monitors[0]
+        if (
+            region["left"] < desktop["left"]
+            or region["top"] < desktop["top"]
+            or region["left"] + region["width"] > desktop["left"] + desktop["width"]
+            or region["top"] + region["height"] > desktop["top"] + desktop["height"]
+        ):
+            raise RuntimeError("Gardez toute la fenêtre Brave dans les écrans visibles.")
+        self.log.info("capture.grab.begin width=%s height=%s", region["width"], region["height"])
+        frame = np.array(self.screen.grab(region))[:, :, :3].copy()
+        self.log.info("capture.grab.end")
+        packet = (frame, time.monotonic(), (time.perf_counter() - started) * 1000)
+        with self._lock:
+            self._latest = packet
+        self.log.info("capture.published")
 
     @Slot()
     def stop(self):
+        self._cancel.set()
+        thread = self._thread
+        if thread is not None and thread is not current_thread():
+            thread.join(timeout=2)
+            if thread.is_alive():
+                self.log.error("capture.stop_timeout")
+                self.error.emit("La capture Windows ne répond pas à l’arrêt.")
+                return
         with self._lock:
             self._latest = None
-        if self.timer is not None:
-            self.timer.stop()
-            self.timer.deleteLater()
-            self.timer = None
-        if self.screen is not None:
-            self.screen.close()
-            self.screen = None
-        self.stopped.emit()
 
     def take_frame(self):
-        """Thread-safe handoff; never touches the worker timer or MSS object."""
+        """Thread-safe handoff; never touches the MSS object."""
         with self._lock:
             packet, self._latest = self._latest, None
         return packet
