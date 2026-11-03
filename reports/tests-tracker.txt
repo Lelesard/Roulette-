@@ -1,8 +1,10 @@
 test_analysis_worker_runs_without_blocking_sqlite_or_ui (test_extensions.DesktopTests.test_analysis_worker_runs_without_blocking_sqlite_or_ui) ... ok
 test_capture_continues_without_ack_and_recovers_after_ui_pause (test_extensions.DesktopTests.test_capture_continues_without_ack_and_recovers_after_ui_pause) ... ok
+test_capture_watchdog_and_log_identify_stalled_stream (test_extensions.DesktopTests.test_capture_watchdog_and_log_identify_stalled_stream) ... ok
 test_manual_roi_touch_and_profile_persistence (test_extensions.DesktopTests.test_manual_roi_touch_and_profile_persistence) ... This plugin does not support propagateSizeHints()
 ok
 test_ocr_worker_is_queued_and_stale_context_is_ignored (test_extensions.DesktopTests.test_ocr_worker_is_queued_and_stale_context_is_ignored) ... ok
+test_preview_exception_is_logged_and_reported (test_extensions.DesktopTests.test_preview_exception_is_logged_and_reported) ... ok
 test_benchmark_requires_annotations_and_does_not_invent_rates (test_extensions.EvaluationTests.test_benchmark_requires_annotations_and_does_not_invent_rates) ... ok
 test_evaluation_rejects_leakage_duplicates_and_development_set (test_extensions.EvaluationTests.test_evaluation_rejects_leakage_duplicates_and_development_set) ... ok
 test_model_refuses_future_frames_missing_calibration_and_large_uncertainty (test_extensions.EvaluationTests.test_model_refuses_future_frames_missing_calibration_and_large_uncertainty) ... ok
@@ -24,6 +26,6 @@ test_import_atomic_export_and_pagination (test_tracker.StorageTests.test_import_
 test_void_audit_and_session_isolation (test_tracker.StorageTests.test_void_audit_and_session_isolation) ... ok
 
 ----------------------------------------------------------------------
-Ran 22 tests in 1.801s
+Ran 24 tests in 1.830s
 
 OK

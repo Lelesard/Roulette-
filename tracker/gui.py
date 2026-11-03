@@ -1,6 +1,9 @@
 import os
 import argparse
 import tempfile
+import logging
+import shutil
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from PySide6.QtCore import Qt, QThread, QTimer, Signal, Slot, QMetaObject, QByteArray
 from PySide6.QtWidgets import (
@@ -79,7 +82,7 @@ class Window(QMainWindow, DesktopTools):
     def __init__(self, db_path=None):
         super().__init__()
         self._closing = False
-        self.setWindowTitle("Tracker Roulette — local")
+        self.setWindowTitle("Tracker Roulette — capture diagnostic v2")
         self.resize(1300, 850)
         if db_path is None:
             root = (
@@ -88,6 +91,20 @@ class Window(QMainWindow, DesktopTools):
             )
             root.mkdir(parents=True, exist_ok=True)
             db_path = root / "tracker.sqlite3"
+        self.capture_log_path = Path(db_path).parent / "capture-diagnostic.log"
+        self.capture_log = logging.getLogger(f"roulette.capture.{id(self)}")
+        self.capture_log.setLevel(logging.INFO)
+        self.capture_log.propagate = False
+        self.capture_log_handler = RotatingFileHandler(
+            self.capture_log_path, maxBytes=2_000_000, backupCount=1, encoding="utf-8"
+        )
+        self.capture_log_handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(threadName)s %(message)s"
+        ))
+        self.capture_log.addHandler(self.capture_log_handler)
+        self.capture_log.info("version=capture-diagnostic-v2 source=%s", Path(__file__).resolve())
+        self.capture_started_at = None
+        self.capture_stale = False
         self.store = Store(db_path)
         self.bets = []
         self.offset = 0
@@ -142,6 +159,10 @@ class Window(QMainWindow, DesktopTools):
         )
         self.diagnostics = QLabel("Prêt")
         self.diagnostic_page.addWidget(self.diagnostics)
+        self.diagnostic_page.addWidget(QLabel("Version : capture diagnostic v2\nJournal : " + str(self.capture_log_path)))
+        log_row = QHBoxLayout()
+        self.diagnostic_page.addLayout(log_row)
+        self.button(log_row, "Exporter le journal de capture", self.export_capture_log)
         self.sessions.currentIndexChanged.connect(self.session_changed)
         self.load_sessions()
         self.bets = self.store.setting(f"pending_{self.sid}", [])
@@ -766,6 +787,13 @@ class Window(QMainWindow, DesktopTools):
         )
         self.refresh_desktop()
 
+    def export_capture_log(self):
+        target, _ = QFileDialog.getSaveFileName(self, "Exporter le journal de capture", "capture-diagnostic.txt", "Texte (*.txt)")
+        if target:
+            self.capture_log_handler.flush()
+            if Path(target).resolve() != self.capture_log_path.resolve():
+                shutil.copyfile(self.capture_log_path, target)
+
     def closeEvent(self, event):
         if self._closing:
             event.accept()
@@ -781,6 +809,8 @@ class Window(QMainWindow, DesktopTools):
         self.thread.quit()
         self.thread.wait()
         self.store.close()
+        self.capture_log.removeHandler(self.capture_log_handler)
+        self.capture_log_handler.close()
         event.accept()
 
 

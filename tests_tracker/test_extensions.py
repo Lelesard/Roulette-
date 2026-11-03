@@ -367,6 +367,44 @@ class DesktopTests(unittest.TestCase):
                 w.close()
                 self.app.processEvents()
 
+    def test_capture_watchdog_and_log_identify_stalled_stream(self):
+        from tracker.gui import Window
+        with tempfile.TemporaryDirectory() as tmp:
+            w = Window(Path(tmp) / "gui.sqlite")
+            try:
+                self.assertIn("diagnostic v2", w.windowTitle())
+                w.capture_active = True
+                w.capture_started_at = time.monotonic() - 4
+                w.poll_capture()
+                self.assertIn("Aucune nouvelle image", w.capture_status.text())
+                self.assertIn("ui.stalled", w.capture_log_path.read_text())
+                with w.capture_worker._lock:
+                    w.capture_worker._latest = (np.zeros((48, 64, 3), np.uint8), time.monotonic(), 1.0)
+                w.poll_capture()
+                self.assertFalse(w.capture_stale)
+                self.assertIn("Image 1", w.capture_status.text())
+                self.assertIn("ui.frame.end image=1", w.capture_log_path.read_text())
+            finally:
+                w.close()
+                self.app.processEvents()
+
+    def test_preview_exception_is_logged_and_reported(self):
+        from tracker.gui import Window
+        with tempfile.TemporaryDirectory() as tmp:
+            w = Window(Path(tmp) / "gui.sqlite")
+            try:
+                w.capture_active = True
+                with w.capture_worker._lock:
+                    w.capture_worker._latest = (np.zeros((48, 64, 3), np.uint8), time.monotonic(), 1.0)
+                with patch.object(w.live_image, "set_image", side_effect=RuntimeError("fixture display failure")):
+                    w.poll_capture()
+                self.assertFalse(w.capture_active)
+                self.assertIn("fixture display failure", w.capture_status.text())
+                self.assertIn("ui.preview_failure", w.capture_log_path.read_text())
+            finally:
+                w.close()
+                self.app.processEvents()
+
     def test_capture_continues_without_ack_and_recovers_after_ui_pause(self):
         from tracker.gui import Window
 

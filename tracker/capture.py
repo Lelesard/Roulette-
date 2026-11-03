@@ -3,6 +3,7 @@
 import ctypes
 import os
 import time
+import logging
 from threading import Lock
 from ctypes import wintypes
 from dataclasses import dataclass
@@ -141,6 +142,7 @@ class CaptureWorker(QObject):
 
     def __init__(self):
         super().__init__()
+        self.log = logging.getLogger("roulette.capture")
         self.timer = None
         self.screen = None
         self.handle = 0
@@ -150,6 +152,7 @@ class CaptureWorker(QObject):
     @Slot(object, int)
     def start(self, handle, fps):
         self.stop()
+        self.log.info("capture.start fps=%s", fps)
         try:
             import mss
 
@@ -159,8 +162,10 @@ class CaptureWorker(QObject):
             self.timer = QTimer(self)
             self.timer.timeout.connect(self.grab)
             self.timer.start(max(1, round(1000 / max(1, min(30, fps)))))
+            self.log.info("capture.timer active=%s interval=%s", self.timer.isActive(), self.timer.interval())
             self.grab()
         except Exception as exc:
+            self.log.exception("capture.failure")
             self.stop()
             self.error.emit(str(exc))
 
@@ -168,6 +173,7 @@ class CaptureWorker(QObject):
     def grab(self):
         try:
             started = time.perf_counter()
+            self.log.info("capture.region.begin")
             region = client_region(self.handle)
             desktop = self.screen.monitors[0]
             if (
@@ -179,13 +185,17 @@ class CaptureWorker(QObject):
                 raise RuntimeError(
                     "Gardez toute la fenêtre Brave dans les écrans visibles."
                 )
+            self.log.info("capture.grab.begin width=%s height=%s", region["width"], region["height"])
             frame = np.array(self.screen.grab(region))[:, :, :3].copy()
+            self.log.info("capture.grab.end")
             packet = (frame, time.monotonic(), (time.perf_counter() - started) * 1000)
             # One replaceable image: capture never waits for the GUI and cannot
             # accumulate a queue of stale frames when the GUI is temporarily busy.
             with self._lock:
                 self._latest = packet
+            self.log.info("capture.published")
         except Exception as exc:
+            self.log.exception("capture.failure")
             self.stop()
             self.error.emit(str(exc))
 

@@ -113,6 +113,7 @@ class DesktopTools:
         self.make_ocr_settings()
         self.capture_thread = QThread(self)
         self.capture_worker = CaptureWorker()
+        self.capture_worker.log = self.capture_log
         self.capture_worker.moveToThread(self.capture_thread)
         self.capture_thread.finished.connect(self.capture_worker.deleteLater)
         self.start_capture_signal.connect(self.capture_worker.start)
@@ -314,10 +315,14 @@ class DesktopTools:
         self.store.save_setting("capture_fps", self.capture_rate.value())
         self.last_capture_stamp = None
         self.capture_count = 0
+        self.capture_started_at = time.monotonic()
+        self.capture_stale = False
+        self.capture_log.info("ui.start")
         self.start_capture_signal.emit(handle, self.capture_rate.value())
         self.capture_status.setText("Démarrage de la capture visible…")
 
     def stop_capture(self):
+        self.capture_log.info("ui.stop")
         self.capture_active = False
         self.source_epoch += 1
         self.latest_frame = None
@@ -326,6 +331,7 @@ class DesktopTools:
 
     @Slot(str)
     def capture_error(self, message):
+        self.capture_log.error("ui.capture_error %s", message)
         self.capture_active = False
         self.source_epoch += 1
         self.latest_frame = None
@@ -333,11 +339,23 @@ class DesktopTools:
 
     def poll_capture(self):
         packet = self.capture_worker.take_frame()
-        if packet is None or not self.capture_active:
+        if not self.capture_active:
+            return
+        if packet is None:
+            since = self.last_capture_stamp or self.capture_started_at
+            if since is not None and time.monotonic() - since > 3:
+                if not self.capture_stale:
+                    self.capture_log.error("ui.stalled last_frame=%s", getattr(self, "capture_count", 0))
+                    self.capture_stale = True
+                self.capture_status.setText("Aucune nouvelle image depuis plus de 3 s. Exportez le journal dans Diagnostics.")
             return
         try:
+            self.capture_log.info("ui.frame.begin")
             self.capture_frame(*packet)
+            self.capture_stale = False
+            self.capture_log.info("ui.frame.end image=%s", self.capture_count)
         except Exception as exc:
+            self.capture_log.exception("ui.preview_failure")
             self.stop_capture()
             self.capture_status.setText("Erreur d’aperçu : " + str(exc))
 
