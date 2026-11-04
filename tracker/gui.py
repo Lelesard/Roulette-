@@ -91,7 +91,7 @@ class Window(QMainWindow, DesktopTools):
     def __init__(self, db_path=None):
         super().__init__()
         self._closing = False
-        self.setWindowTitle("Tracker Roulette — directions bille et rotor v7")
+        self.setWindowTitle("Tracker Roulette — diagnostic directions v8")
         self.resize(1300, 850)
         if db_path is None:
             root = (
@@ -111,7 +111,7 @@ class Window(QMainWindow, DesktopTools):
             "%(asctime)s %(threadName)s %(message)s"
         ))
         self.capture_log.addHandler(self.capture_log_handler)
-        self.capture_log.info("version=capture-corrected-v3 source=%s", Path(__file__).resolve())
+        self.capture_log.info("version=direction-diagnostic-v8 source=%s", Path(__file__).resolve())
         self.capture_started_at = None
         self.capture_stale = False
         self.store = Store(db_path)
@@ -168,7 +168,7 @@ class Window(QMainWindow, DesktopTools):
         )
         self.diagnostics = QLabel("Prêt")
         self.diagnostic_page.addWidget(self.diagnostics)
-        self.diagnostic_page.addWidget(QLabel("Version : capture corrigée v3\nJournal : " + str(self.capture_log_path)))
+        self.diagnostic_page.addWidget(QLabel("Version : diagnostic directions v8\nJournal : " + str(self.capture_log_path)))
         log_row = QHBoxLayout()
         self.diagnostic_page.addLayout(log_row)
         self.button(log_row, "Exporter le journal de capture", self.export_capture_log)

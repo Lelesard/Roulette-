@@ -49,7 +49,7 @@ class RotorTracker:
     def reset(self):
         self.previous = None
         self.last_time = None
-        self.speeds = deque(maxlen=15)
+        self.speeds = deque(maxlen=18)
 
     @staticmethod
     def polar_band(frame):
@@ -86,28 +86,53 @@ class RotorTracker:
         )
         self.previous, self.last_time = band, seconds
         omega = angular_shift / band.shape[0] * 2 * math.pi / dt
-        if (
-            response < 0.035
-            or abs(radial_shift) > 10
-            or not 0.08 <= abs(omega) <= 18
-        ):
-            self.speeds.clear()
+        while self.speeds and seconds - self.speeds[0][0] > 0.9:
+            self.speeds.popleft()
+        if response < 0.025:
             return RotorTrack(
                 seconds,
-                message=f"Rotor ambigu • corrélation {max(0.0, response):.2f}",
+                message=(
+                    "Rotor : détails insuffisants ou image ambiguë • "
+                    f"corrélation {max(0.0, response):.2f}"
+                ),
             )
-        self.speeds.append(float(omega))
+        if abs(radial_shift) > 18:
+            return RotorTrack(
+                seconds,
+                message=(
+                    f"Rotor : déplacement radial {radial_shift:.1f} px, mesure rejetée • "
+                    f"corrélation {response:.2f}"
+                ),
+            )
+        if abs(omega) < 0.08:
+            return RotorTrack(
+                seconds,
+                message=(
+                    "Rotor immobile ou mouvement trop faible • "
+                    f"corrélation {response:.2f}"
+                ),
+            )
+        if abs(omega) > 28:
+            return RotorTrack(
+                seconds,
+                message=(
+                    f"Rotor : saut angulaire trop rapide ({omega:.1f} rad/s) • "
+                    f"corrélation {response:.2f}"
+                ),
+            )
+        self.speeds.append((seconds, float(omega), float(response)))
         if len(self.speeds) < 5:
             return RotorTrack(
                 seconds,
                 message=f"Rotor : continuité {len(self.speeds)}/5",
             )
-        speeds = np.array(self.speeds)
+        speeds = np.array([sample[1] for sample in self.speeds])
+        responses = np.array([sample[2] for sample in self.speeds])
         median = float(np.median(speeds))
         direction_agreement = float(np.mean(np.sign(speeds) == np.sign(median)))
         spread = float(np.median(np.abs(speeds - median)))
         confidence = (
-            min(1.0, max(0.0, response) / 0.20)
+            min(1.0, max(0.0, float(np.median(responses))) / 0.20)
             * direction_agreement
             * max(0.0, min(1.0, 1 - spread / max(abs(median), 0.2)))
         )
@@ -120,7 +145,10 @@ class RotorTracker:
             seconds,
             median,
             confidence,
-            f"Rotor {direction_label(median)} • mesure expérimentale",
+            (
+                f"Rotor {direction_label(median)} • {len(self.speeds)} mesures récentes • "
+                f"corrélation médiane {float(np.median(responses)):.2f}"
+            ),
         )
 
 

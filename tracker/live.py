@@ -105,6 +105,8 @@ class DesktopTools:
         self.dynamic_wheel_roi = None
         self.ball_state = "non mesurée"
         self.rotor_state = "non mesuré"
+        self.last_ball_direction = None
+        self.last_rotor_direction = None
         for name in ("Deutsches Roulette", "VIP Roulette", "Table manuelle"):
             if name not in self.store.profile_names():
                 self.store.save_profile(name, {})
@@ -261,6 +263,8 @@ class DesktopTools:
         self.camera_epoch += 1
         self.ball_state = "non mesurée"
         self.rotor_state = "non mesuré"
+        self.last_ball_direction = None
+        self.last_rotor_direction = None
         for view in (self.live_image, self.video_image):
             view.point = None
             view.update()
@@ -456,6 +460,8 @@ class DesktopTools:
         self.dynamic_wheel_roi = None
         self.ball_state = "non mesurée"
         self.rotor_state = "non mesuré"
+        self.last_ball_direction = None
+        self.last_rotor_direction = None
         self.clear_dynamic_scene()
         self.capture_active = True
         self.latest_frame = None
@@ -475,8 +481,6 @@ class DesktopTools:
         self.source_epoch += 1
         self.camera_epoch += 1
         self.dynamic_wheel_roi = None
-        self.ball_state = "non mesurée"
-        self.rotor_state = "non mesuré"
         self.clear_dynamic_scene()
         self.latest_frame = None
         self.stop_capture_signal.emit()
@@ -525,6 +529,12 @@ class DesktopTools:
         )
         self.last_capture_stamp = stamp
         self.capture_count = getattr(self, "capture_count", 0) + 1
+        self.ball_state = self.remembered_direction(
+            self.last_ball_direction, "non mesurée"
+        )
+        self.rotor_state = self.remembered_direction(
+            self.last_rotor_direction, "non mesuré"
+        )
         self.capture_status.setText(
             f"Image {self.capture_count} • Capture {frame.shape[1]} × {frame.shape[0]} • {fps:.1f} FPS • capture {latency:.1f} ms • âge {max(0, time.monotonic() - stamp) * 1000:.1f} ms • bille : {self.ball_state} • rotor : {self.rotor_state}"
         )
@@ -710,6 +720,8 @@ class DesktopTools:
             self.dynamic_wheel_roi = None
             self.ball_state = "non mesurée"
             self.rotor_state = "non mesuré"
+            self.last_ball_direction = None
+            self.last_rotor_direction = None
             self.clear_dynamic_scene()
             self.track_status.setText(
                 "Changement de caméra : suivi réinitialisé • Aucune estimation fiable"
@@ -804,18 +816,41 @@ class DesktopTools:
         self.analysis_busy = False
         if not self.context_valid(context):
             return
-        self.ball_state = direction_label(track.omega)
-        self.rotor_state = direction_label(track.rotor_omega)
+        now = time.monotonic()
+        current_ball = direction_label(track.omega)
+        current_rotor = direction_label(track.rotor_omega)
+        if track.omega is not None:
+            self.last_ball_direction = (
+                current_ball,
+                track.omega,
+                track.confidence,
+                now,
+            )
+        if track.rotor_omega is not None:
+            self.last_rotor_direction = (
+                current_rotor,
+                track.rotor_omega,
+                track.rotor_confidence,
+                now,
+            )
+        self.ball_state = self.remembered_direction(
+            self.last_ball_direction, "non mesurée"
+        )
+        self.rotor_state = self.remembered_direction(
+            self.last_rotor_direction, "non mesuré"
+        )
         ball_omega = f"{track.omega:.2f}" if track.omega is not None else "—"
         ball_alpha = f"{track.alpha:.2f}" if track.alpha is not None else "—"
         rotor_omega = (
             f"{track.rotor_omega:.2f}" if track.rotor_omega is not None else "—"
         )
         self.track_status.setText(
-            f"Bille : {self.ball_state} • {track.message}\n"
+            f"Bille maintenant : {current_ball} • {track.message}\n"
             f"Continuité bille : {track.confidence:.2f} • ω : {ball_omega} rad/s • α : {ball_alpha} rad/s²\n"
-            f"Rotor : {self.rotor_state} • {track.rotor_message}\n"
+            f"Dernière direction bille : {self.ball_state}\n"
+            f"Rotor maintenant : {current_rotor} • {track.rotor_message}\n"
             f"Confiance rotor : {track.rotor_confidence:.2f} • ω : {rotor_omega} rad/s\n"
+            f"Dernière direction rotor : {self.rotor_state}\n"
             "Sens observés sur l’image affichée • Aucune estimation fiable"
         )
         roi = self.dynamic_wheel_roi or self.store.profile(
@@ -842,7 +877,19 @@ class DesktopTools:
         if self.context_valid(context):
             self.ball_state = "non mesurée"
             self.rotor_state = "non mesuré"
+            self.last_ball_direction = None
+            self.last_rotor_direction = None
             self.track_status.setText("Analyse interrompue : " + message)
+
+    @staticmethod
+    def remembered_direction(measurement, empty):
+        if measurement is None:
+            return empty
+        label, _omega, _confidence, measured_at = measurement
+        age = max(0.0, time.monotonic() - measured_at)
+        if age < 0.8:
+            return label
+        return f"{label} (dernière mesure il y a {age:.1f} s)"
 
     def refresh_desktop(self):
         if not hasattr(self, "direct_summary"):

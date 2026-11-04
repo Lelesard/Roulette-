@@ -22,7 +22,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from tracker.capture import crop_roi, brave_windows, detect_wheel_roi
 from tracker.evaluation import PhysicalState, estimate, evaluate
-from tracker.experimental import CandidateTracker, RotorTracker, direction_label
+from tracker.experimental import CandidateTracker, RotorTracker, Track, direction_label
 from tracker.ocr import reconcile, read_numbers
 from tracker.scene import SceneObserver, SceneObservation, intersection_over_union
 from tracker.storage import Store
@@ -312,6 +312,37 @@ class VisionTests(unittest.TestCase):
         for index in range(12):
             observation = tracker.analyze(frame, index / 30)
         self.assertIsNone(observation.omega)
+        self.assertIn("détails insuffisants", observation.message)
+
+    def test_rotor_tracker_tolerates_brief_ambiguous_images(self):
+        size = 240
+        center = (size // 2, size // 2)
+        base = np.zeros((size, size, 3), np.uint8)
+        rng = np.random.default_rng(8)
+        for _ in range(90):
+            angle = rng.uniform(0, 2 * math.pi)
+            radius = rng.uniform(45, 90)
+            point = (
+                round(center[0] + radius * math.cos(angle)),
+                round(center[1] + radius * math.sin(angle)),
+            )
+            cv2.circle(base, point, 2, (220, 220, 220), -1)
+        tracker = RotorTracker()
+        observation = None
+        for index in range(8):
+            transform = cv2.getRotationMatrix2D(center, -2 * index, 1)
+            frame = cv2.warpAffine(base, transform, (size, size))
+            observation = tracker.analyze(frame, index / 30)
+        self.assertIsNotNone(observation.omega)
+        blank = np.zeros_like(base)
+        tracker.analyze(blank, 8 / 30)
+        tracker.analyze(blank, 9 / 30)
+        for index in range(10, 13):
+            transform = cv2.getRotationMatrix2D(center, -2 * index, 1)
+            frame = cv2.warpAffine(base, transform, (size, size))
+            observation = tracker.analyze(frame, index / 30)
+        self.assertIsNotNone(observation.omega)
+        self.assertGreater(observation.omega, 0)
 
     @unittest.skipUnless(
         shutil.which("tesseract"), "Moteur Tesseract facultatif absent"
@@ -613,12 +644,47 @@ class DesktopTests(unittest.TestCase):
                 w.close()
                 self.app.processEvents()
 
+    def test_last_directions_remain_visible_after_current_measurement_is_lost(self):
+        from tracker.gui import Window
+
+        with tempfile.TemporaryDirectory() as tmp:
+            w = Window(Path(tmp) / "gui.sqlite")
+            try:
+                context = (w.source_epoch, w.sid, "video", "fixture")
+                w.analysis_ready(
+                    context,
+                    Track(
+                        1.0,
+                        omega=2.0,
+                        confidence=0.8,
+                        message="candidat",
+                        rotor_omega=-1.0,
+                        rotor_confidence=0.7,
+                        rotor_message="rotor",
+                    ),
+                )
+                w.analysis_ready(
+                    context,
+                    Track(
+                        1.1,
+                        message="bille perdue",
+                        rotor_message="rotor immobile",
+                    ),
+                )
+                status = w.track_status.text()
+                self.assertIn("Dernière direction bille : horaire", status)
+                self.assertIn("Dernière direction rotor : antihoraire", status)
+                self.assertIn("Bille maintenant : non mesuré", status)
+            finally:
+                w.close()
+                self.app.processEvents()
+
     def test_capture_watchdog_and_log_identify_stalled_stream(self):
         from tracker.gui import Window
         with tempfile.TemporaryDirectory() as tmp:
             w = Window(Path(tmp) / "gui.sqlite")
             try:
-                self.assertIn("directions bille et rotor v7", w.windowTitle())
+                self.assertIn("diagnostic directions v8", w.windowTitle())
                 w.capture_active = True
                 w.capture_started_at = time.monotonic() - 4
                 w.poll_capture()

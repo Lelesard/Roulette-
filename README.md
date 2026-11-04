@@ -33,6 +33,9 @@ la bille. Lorsque la trajectoire est continue, l'interface affiche son sens.
 Le même worker déroule en coordonnées polaires la bande centrale du cylindre et
 mesure le déplacement de ses détails entre deux images. Après cinq mesures
 concordantes, il affiche séparément le sens du rotor et son score de corrélation.
+Les mesures récentes survivent aux images momentanément ambiguës. Diagnostics
+conserve la dernière direction reconnue avec son âge, même lorsque la roue vient
+de s'arrêter, et explique précisément pourquoi la mesure courante est rejetée.
 Les sens **horaire** et **antihoraire** décrivent l'image affichée. Un flux mis en
 miroir inverse leur relation avec la roulette physique. Cette mesure ne fournit
 ni position absolue de la poche zéro, ni numéro ou secteur final.
