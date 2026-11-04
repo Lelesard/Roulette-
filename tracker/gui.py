@@ -91,7 +91,7 @@ class Window(QMainWindow, DesktopTools):
     def __init__(self, db_path=None):
         super().__init__()
         self._closing = False
-        self.setWindowTitle("Tracker Roulette — vitesses indépendantes v10")
+        self.setWindowTitle("Tracker Roulette — enregistreur de lancers v11")
         self.resize(1300, 850)
         if db_path is None:
             root = (
@@ -111,7 +111,7 @@ class Window(QMainWindow, DesktopTools):
             "%(asctime)s %(threadName)s %(message)s"
         ))
         self.capture_log.addHandler(self.capture_log_handler)
-        self.capture_log.info("version=independent-speeds-v10 source=%s", Path(__file__).resolve())
+        self.capture_log.info("version=spin-measurement-recorder-v11 source=%s", Path(__file__).resolve())
         self.capture_started_at = None
         self.capture_stale = False
         self.store = Store(db_path)
@@ -168,7 +168,7 @@ class Window(QMainWindow, DesktopTools):
         )
         self.diagnostics = QLabel("Prêt")
         self.diagnostic_page.addWidget(self.diagnostics)
-        self.diagnostic_page.addWidget(QLabel("Version : vitesses indépendantes v10\nJournal : " + str(self.capture_log_path)))
+        self.diagnostic_page.addWidget(QLabel("Version : enregistreur de lancers v11\nJournal : " + str(self.capture_log_path)))
         log_row = QHBoxLayout()
         self.diagnostic_page.addLayout(log_row)
         self.button(log_row, "Exporter le journal de capture", self.export_capture_log)
@@ -408,9 +408,14 @@ class Window(QMainWindow, DesktopTools):
         self.refresh()
 
     def record(self):
-        self.store.add_spin(
+        spin = self.store.add_spin(
             self.sid, self.result.value(), self.bets, settle_pending=True
         )
+        if hasattr(self, "measurement_recorder"):
+            self.measurement_recorder.attach_result(
+                self.result.value(), spin, self.sid
+            )
+            self.measurement_status.setText(self.measurement_recorder.status())
         self.bets.clear()
         self.offset = 0
         self.refresh()

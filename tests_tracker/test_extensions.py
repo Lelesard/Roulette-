@@ -725,7 +725,7 @@ class DesktopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             w = Window(Path(tmp) / "gui.sqlite")
             try:
-                self.assertIn("vitesses indépendantes v10", w.windowTitle())
+                self.assertIn("enregistreur de lancers v11", w.windowTitle())
                 w.capture_active = True
                 w.capture_started_at = time.monotonic() - 4
                 w.poll_capture()

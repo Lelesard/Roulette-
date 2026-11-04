@@ -63,6 +63,22 @@ dans le profil et ne remplacent pas un calibrage manuel. Le suivi expérimental 
 candidat bille et la mesure du rotor peuvent utiliser une zone dynamique stable
 en direct, mais leur identité physique reste non validée.
 
+## Enregistrement des lancers v11
+
+Lorsqu'une bille est validée par sa vitesse indépendante du rotor, le Tracker
+ouvre automatiquement un lancer mesuré avec deux secondes de préhistorique. Il
+enregistre les horodatages, directions, vitesses, accélération bille, scores,
+messages de rejet et époque caméra. Cinq secondes sans nouvelle bille validée
+ferment le lancer ; un arrêt de capture, une coupure caméra ou le bouton de fin
+manuelle le ferment également.
+
+Le fichier local `roulette-measurements-v11.json` est sauvegardé à côté de la
+base utilisateur. Diagnostics affiche le nombre de lancers et propose
+**Exporter les mesures v11**. Saisir manuellement un résultat avec
+**Enregistrer et régler le tour** l'associe au dernier lancer non renseigné de
+la même session. L'export ne contient aucune image, URL, titre de fenêtre ou
+identifiant casino. Il constitue un jeu de mesures, pas une prédiction.
+
 ## Démarrage Windows
 
 1. Installer Python **3.11 ou 3.12, 64 bits**, avec le lanceur `py`.

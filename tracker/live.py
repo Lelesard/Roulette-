@@ -32,6 +32,7 @@ from .experimental import (
     direction_label,
     validate_ball_direction,
 )
+from .measurements import MeasurementRecorder
 from .scene import SceneObserver
 from .widgets import FrameView
 
@@ -114,6 +115,9 @@ class DesktopTools:
         self.rotor_state = "non mesuré"
         self.last_ball_direction = None
         self.last_rotor_direction = None
+        self.measurement_recorder = MeasurementRecorder(
+            self.capture_log_path.with_name("roulette-measurements-v11.json")
+        )
         for name in ("Deutsches Roulette", "VIP Roulette", "Table manuelle"):
             if name not in self.store.profile_names():
                 self.store.save_profile(name, {})
@@ -265,6 +269,8 @@ class DesktopTools:
         )
 
     def toggle_experimental_ball(self, enabled):
+        if not enabled:
+            self.measurement_recorder.finish("suivi expérimental désactivé")
         self.store.save_setting("experimental_ball", enabled)
         self.analysis_busy = False
         self.camera_epoch += 1
@@ -461,6 +467,7 @@ class DesktopTools:
         handle = self.brave_list.currentData()
         if handle is None:
             return
+        self.measurement_recorder.finish("nouveau démarrage de capture")
         self.timer.stop()
         self.source_epoch += 1
         self.camera_epoch += 1
@@ -484,6 +491,7 @@ class DesktopTools:
 
     def stop_capture(self):
         self.capture_log.info("ui.stop")
+        self.measurement_recorder.finish("capture arrêtée")
         self.capture_active = False
         self.source_epoch += 1
         self.camera_epoch += 1
@@ -597,6 +605,13 @@ class DesktopTools:
         )
         self.track_status.setWordWrap(True)
         self.diagnostic_page.addWidget(self.track_status)
+        self.measurement_status = QLabel(self.measurement_recorder.status())
+        self.measurement_status.setWordWrap(True)
+        self.diagnostic_page.addWidget(self.measurement_status)
+        row = QHBoxLayout()
+        self.diagnostic_page.addLayout(row)
+        self.button(row, "Terminer le lancer mesuré", self.finish_measurement_run)
+        self.button(row, "Exporter les mesures v11", self.export_measurements)
         self.settings_page.addStretch()
         self.button(
             self.diagnostic_page,
@@ -618,6 +633,24 @@ class DesktopTools:
             raise ValueError("Choisissez un autre fichier que la base active.")
         with sqlite3.connect(path) as target:
             self.store.db.backup(target)
+
+    def finish_measurement_run(self):
+        self.measurement_recorder.finish("fin manuelle")
+        self.measurement_status.setText(self.measurement_recorder.status())
+
+    def export_measurements(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Exporter les mesures des lancers",
+            "roulette-mesures-v11.json",
+            "JSON (*.json)",
+        )
+        if not path:
+            return
+        self.measurement_recorder.export(path)
+        self.measurement_status.setText(
+            self.measurement_recorder.status() + " • export terminé"
+        )
 
     def reset_ocr_proposal(self):
         self.source_epoch += 1
@@ -722,6 +755,7 @@ class DesktopTools:
         if not self.scene_context_valid(context) or not self.automatic_scene.isChecked():
             return
         if observation.camera_changed:
+            self.measurement_recorder.finish("changement de caméra")
             self.camera_epoch += 1
             self.analysis_busy = False
             self.dynamic_wheel_roi = None
@@ -824,6 +858,8 @@ class DesktopTools:
         if not self.context_valid(context):
             return
         now = time.monotonic()
+        self.measurement_recorder.add(context, track, now)
+        self.measurement_status.setText(self.measurement_recorder.status())
         current_ball = direction_label(track.omega)
         current_rotor = direction_label(track.rotor_omega)
         if track.omega is not None:
@@ -921,6 +957,7 @@ class DesktopTools:
 
     def shutdown_desktop(self):
         self.preview_timer.stop()
+        self.measurement_recorder.finish("fermeture de l’application")
         self.capture_active = False
         self.source_epoch += 1
         QMetaObject.invokeMethod(
