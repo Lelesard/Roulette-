@@ -97,7 +97,14 @@ class FrameView(QWidget):
                 abs(self.start.y() - self.end.y()),
             )
         for name, (x, y, w, h) in regions.items():
-            p.setPen(QPen(QColor("#52d9ec" if name == "wheel_roi" else "#f9bf66"), 2))
+            color = (
+                "#78f06b"
+                if name == "wheel_candidate"
+                else "#52d9ec"
+                if name == "wheel_roi"
+                else "#f9bf66"
+            )
+            p.setPen(QPen(QColor(color), 3 if name == "wheel_candidate" else 2))
             box = QRectF(
                 r.x() + x * r.width(),
                 r.y() + y * r.height(),
@@ -107,7 +114,11 @@ class FrameView(QWidget):
             p.drawRect(box)
             p.drawText(
                 box.topLeft() + QPointF(4, 17),
-                {"wheel_roi": "Cylindre", "results_roi": "Résultats"}.get(name, name),
+                {
+                    "wheel_roi": "Cylindre",
+                    "wheel_candidate": "Cylindre proposé",
+                    "results_roi": "Résultats",
+                }.get(name, name),
             )
         if self.point:
             p.setPen(QPen(QColor("#f7df57"), 3))

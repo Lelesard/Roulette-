@@ -14,9 +14,16 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QInputDialog,
     QFileDialog,
+    QMessageBox,
 )
 
-from .capture import CaptureWorker, brave_windows, crop_roi, to_image
+from .capture import (
+    CaptureWorker,
+    brave_windows,
+    crop_roi,
+    detect_wheel_roi,
+    to_image,
+)
 from .ocr import OCRWorker, reconcile
 from .experimental import CandidateTracker
 from .widgets import FrameView
@@ -176,6 +183,9 @@ class DesktopTools:
             row, "Calibrer le cylindre", lambda: self.begin_roi(view, "wheel_roi")
         )
         self.button(
+            row, "Détecter le cylindre", lambda: self.auto_calibrate_wheel(view)
+        )
+        self.button(
             row, "Calibrer les résultats", lambda: self.begin_roi(view, "results_roi")
         )
         self.button(row, "Effacer le calibrage", self.clear_calibration)
@@ -273,6 +283,34 @@ class DesktopTools:
         view.mode = mode
         view.setCursor(Qt.CursorShape.CrossCursor)
         view.update()
+
+    def auto_calibrate_wheel(self, view):
+        frame = self.latest_frame
+        if frame is None or view.image is None:
+            raise ValueError("Affichez une image avant de détecter le cylindre.")
+        roi, confidence = detect_wheel_roi(frame)
+        previous = dict(view.regions)
+        view.regions["wheel_candidate"] = roi
+        view.update()
+        answer = QMessageBox.question(
+            self,
+            "Cylindre détecté",
+            "Le cadre vert entoure-t-il toute la roue ?\n"
+            f"Score géométrique : {confidence * 100:.0f} %",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        view.regions = previous
+        if answer != QMessageBox.StandardButton.Yes:
+            view.update()
+            self.capture_status.setText(
+                "Proposition refusée • calibrez manuellement ou attendez une autre caméra."
+            )
+            return
+        self.save_roi(("wheel_roi", roi))
+        self.capture_status.setText(
+            f"Cylindre calibré automatiquement • score géométrique {confidence * 100:.0f} %"
+        )
 
     def save_roi(self, data):
         mode, roi = data

@@ -18,9 +18,9 @@ import numpy as np
 from PySide6.QtCore import Qt, QPoint
 from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
-from tracker.capture import crop_roi, brave_windows
+from tracker.capture import crop_roi, brave_windows, detect_wheel_roi
 from tracker.evaluation import PhysicalState, estimate, evaluate
 from tracker.experimental import CandidateTracker
 from tracker.ocr import reconcile, read_numbers
@@ -114,6 +114,38 @@ class PersistenceTests(unittest.TestCase):
 
 
 class VisionTests(unittest.TestCase):
+    def test_automatic_wheel_calibration_finds_concentric_ellipse(self):
+        frame = np.full((540, 960, 3), 24, np.uint8)
+        center = (620, 245)
+        axes = (205, 145)
+        for inset, color in ((0, 235), (18, 80), (38, 220), (62, 70)):
+            cv2.ellipse(
+                frame,
+                center,
+                (axes[0] - inset, axes[1] - round(inset * 0.7)),
+                -8,
+                0,
+                360,
+                (color, color, color),
+                4,
+            )
+        cv2.rectangle(frame, (10, 410), (950, 530), (70, 110, 40), -1)
+        roi, score = detect_wheel_roi(frame)
+        x, y, w, h = roi
+        self.assertGreater(score, 0.54)
+        self.assertLess(x, center[0] / 960)
+        self.assertLess(y, center[1] / 540)
+        self.assertGreater(x + w, center[0] / 960)
+        self.assertGreater(y + h, center[1] / 540)
+        self.assertGreater(w, 0.30)
+        self.assertGreater(h, 0.35)
+
+    def test_automatic_wheel_calibration_refuses_blank_or_small_images(self):
+        with self.assertRaises(ValueError):
+            detect_wheel_roi(np.zeros((80, 100, 3), np.uint8))
+        with self.assertRaises(ValueError):
+            detect_wheel_roi(np.zeros((360, 640, 3), np.uint8))
+
     def test_regions_and_ambiguous_overlap(self):
         frame = np.zeros((100, 200, 3), np.uint8)
         self.assertEqual(crop_roi(frame, (0.1, 0.2, 0.5, 0.4)).shape, (40, 100, 3))
@@ -327,6 +359,43 @@ class DesktopTests(unittest.TestCase):
                 w.close()
                 self.app.processEvents()
 
+    def test_automatic_calibration_requires_confirmation(self):
+        from tracker.gui import Window
+
+        with tempfile.TemporaryDirectory() as tmp:
+            w = Window(Path(tmp) / "gui.sqlite")
+            try:
+                frame = np.zeros((360, 640, 3), np.uint8)
+                image = QImage(640, 360, QImage.Format.Format_RGB888)
+                image.fill(Qt.GlobalColor.black)
+                w.latest_frame = frame
+                w.live_image.set_image(image)
+                proposed = (0.2, 0.1, 0.5, 0.7)
+                with (
+                    patch("tracker.live.detect_wheel_roi", return_value=(proposed, 0.82)),
+                    patch(
+                        "tracker.live.QMessageBox.question",
+                        return_value=QMessageBox.StandardButton.No,
+                    ),
+                ):
+                    w.auto_calibrate_wheel(w.live_image)
+                self.assertNotIn("wheel_roi", w.store.profile(w.active_table()))
+                with (
+                    patch("tracker.live.detect_wheel_roi", return_value=(proposed, 0.82)),
+                    patch(
+                        "tracker.live.QMessageBox.question",
+                        return_value=QMessageBox.StandardButton.Yes,
+                    ),
+                ):
+                    w.auto_calibrate_wheel(w.live_image)
+                self.assertEqual(
+                    tuple(w.store.profile(w.active_table())["wheel_roi"]), proposed
+                )
+                self.assertNotIn("wheel_candidate", w.live_image.regions)
+            finally:
+                w.close()
+                self.app.processEvents()
+
     def test_ocr_worker_is_queued_and_stale_context_is_ignored(self):
         from tracker.gui import Window
 
@@ -372,7 +441,7 @@ class DesktopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             w = Window(Path(tmp) / "gui.sqlite")
             try:
-                self.assertIn("corrigée v3", w.windowTitle())
+                self.assertIn("calibrage automatique v4", w.windowTitle())
                 w.capture_active = True
                 w.capture_started_at = time.monotonic() - 4
                 w.poll_capture()

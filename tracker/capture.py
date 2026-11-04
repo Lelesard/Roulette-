@@ -130,6 +130,100 @@ def crop_roi(frame, roi):
     return result
 
 
+def detect_wheel_roi(frame):
+    """Return a conservative wheel-region proposal and a geometric score."""
+    if frame is None or frame.ndim != 3 or min(frame.shape[:2]) < 120:
+        raise ValueError("Image trop petite pour détecter le cylindre.")
+    height, width = frame.shape[:2]
+    scale = min(1.0, 960.0 / max(width, height))
+    work = cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    gray = cv2.GaussianBlur(cv2.cvtColor(work, cv2.COLOR_BGR2GRAY), (5, 5), 0)
+    edges = cv2.Canny(gray, 45, 135)
+    edges = cv2.morphologyEx(
+        edges,
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)),
+        iterations=2,
+    )
+    contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+    edge_distance = cv2.distanceTransform(255 - edges, cv2.DIST_L2, 3)
+    image_area = work.shape[0] * work.shape[1]
+    candidates = []
+    for contour in contours:
+        if len(contour) < 40:
+            continue
+        center, axes, angle = cv2.fitEllipse(contour)
+        major, minor = max(axes), min(axes)
+        ellipse_area = np.pi * major * minor / 4
+        ratio = minor / max(major, 1)
+        area_ratio = ellipse_area / image_area
+        if not 0.025 <= area_ratio <= 0.72 or ratio < 0.42:
+            continue
+        samples = np.zeros_like(edges)
+        cv2.ellipse(
+            samples,
+            (tuple(map(int, center)), tuple(max(2, round(v / 2)) for v in axes), angle),
+            255,
+            2,
+        )
+        ys, xs = np.nonzero(samples)
+        if len(xs) < 80:
+            continue
+        support = float(np.mean(edge_distance[ys, xs] <= 2.5))
+        ellipse_box = cv2.boxPoints((center, axes, angle))
+        bx0, by0 = np.maximum(ellipse_box.min(axis=0), 0).astype(int)
+        bx1, by1 = np.minimum(
+            ellipse_box.max(axis=0), (work.shape[1], work.shape[0])
+        ).astype(int)
+        patch = edges[by0:by1, bx0:bx1]
+        density = float(np.mean(patch > 0)) if patch.size else 0.0
+        fill = min(1.0, abs(cv2.contourArea(contour)) / max(ellipse_area, 1))
+        score = (
+            0.58 * support
+            + 0.20 * min(1.0, density / 0.18)
+            + 0.12 * ratio
+            + 0.10 * fill
+        )
+        candidates.append((score, center, axes, angle))
+    if not candidates:
+        raise ValueError("Aucun cylindre assez net trouvé. Utilisez le calibrage manuel.")
+    ranked = []
+    for candidate in candidates:
+        base, center, axes, _ = candidate
+        radius = max(axes) / 2
+        cluster = [
+            other
+            for other in candidates
+            if np.hypot(
+                other[1][0] - center[0], other[1][1] - center[1]
+            )
+            <= max(8, radius * 0.12)
+        ]
+        concentric_bonus = min(0.35, max(0, len(cluster) - 1) * 0.07)
+        ranked.append((base + concentric_bonus, cluster))
+    score, cluster = max(ranked, key=lambda item: item[0])
+    _, center, axes, angle = max(
+        cluster, key=lambda item: item[2][0] * item[2][1]
+    )
+    if score < 0.54:
+        raise ValueError(
+            f"Cylindre incertain (score {score * 100:.0f} %). "
+            "Attendez une vue complète ou calibrez manuellement."
+        )
+    points = cv2.boxPoints((center, (axes[0] * 1.10, axes[1] * 1.10), angle))
+    x0, y0 = np.maximum(points.min(axis=0), 0)
+    x1, y1 = np.minimum(points.max(axis=0), (work.shape[1], work.shape[0]))
+    roi = (
+        x0 / work.shape[1],
+        y0 / work.shape[0],
+        (x1 - x0) / work.shape[1],
+        (y1 - y0) / work.shape[0],
+    )
+    if roi[2] < 0.12 or roi[3] < 0.12:
+        raise ValueError("Cylindre détecté trop petit. Agrandissez la table.")
+    return tuple(float(v) for v in roi), float(score)
+
+
 def to_image(frame):
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     h, w = rgb.shape[:2]

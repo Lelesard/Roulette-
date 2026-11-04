@@ -4,6 +4,19 @@ Application de bureau en français : Python 3.11/3.12, PySide6, OpenCV, NumPy, M
 
 Le **Lot A est implémenté**. Les ajouts OCR, recherche de candidat bille et modèle physique sont **expérimentaux et partiels**. La capture Win32 est codée mais n’a pas été essayée sur Windows dans cet environnement Linux. Aucun taux de prédiction réel n’est établi. Voir `VALIDATION_TRACKER.md` pour le périmètre exact.
 
+## Calibrage automatique du cylindre
+
+Dans **Direct** ou **Vidéos et tests**, affichez une image où la roue est entière,
+puis cliquez sur **Détecter le cylindre**. Le Tracker cherche plusieurs contours
+elliptiques concentriques et affiche sa proposition en vert. Vérifiez que le cadre
+contient toute la roue avant de confirmer. Une proposition refusée n'écrase pas le
+calibrage existant. Si la caméra coupe la roue, si elle est trop petite ou si le
+score est insuffisant, attendez une autre vue ou utilisez **Calibrer le cylindre**.
+
+Le score affiché mesure uniquement la qualité géométrique du cadre. Il ne prouve
+pas que la bille ou le rotor sont détectés. Le suivi expérimental existant reste
+limité aux vidéos enregistrées et doit être validé séparément.
+
 ## Démarrage Windows
 
 1. Installer Python **3.11 ou 3.12, 64 bits**, avec le lanceur `py`.

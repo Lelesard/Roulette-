@@ -82,7 +82,7 @@ class Window(QMainWindow, DesktopTools):
     def __init__(self, db_path=None):
         super().__init__()
         self._closing = False
-        self.setWindowTitle("Tracker Roulette — capture corrigée v3")
+        self.setWindowTitle("Tracker Roulette — calibrage automatique v4")
         self.resize(1300, 850)
         if db_path is None:
             root = (
