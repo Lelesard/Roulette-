@@ -14,8 +14,22 @@ calibrage existant. Si la caméra coupe la roue, si elle est trop petite ou si l
 score est insuffisant, attendez une autre vue ou utilisez **Calibrer le cylindre**.
 
 Le score affiché mesure uniquement la qualité géométrique du cadre. Il ne prouve
-pas que la bille ou le rotor sont détectés. Le suivi expérimental existant reste
-limité aux vidéos enregistrées et doit être validé séparément.
+pas que la bille ou le rotor sont détectés. Le suivi expérimental doit être
+validé séparément.
+
+## Analyse dynamique des changements de caméra
+
+La case **Analyse automatique** active un observateur de scène dans Direct. Il
+analyse une image environ toutes les 550 ms dans un thread séparé. Une zone de
+roue ne devient exploitable qu'après trois observations concordantes. Le cadre
+orange signale une proposition en cours ; le cadre vert signale une roue stable.
+
+Une coupure caméra réinitialise immédiatement le suivi. Lorsque la roue est
+momentanément masquée, le dernier cadre est conservé pendant 1,5 seconde, puis
+retiré si elle ne réapparaît pas. Ces cadres dynamiques ne sont pas enregistrés
+dans le profil et ne remplacent pas un calibrage manuel. Le suivi expérimental de
+candidat bille peut maintenant utiliser une zone dynamique stable en direct,
+mais son identité et le rotor restent non validés.
 
 ## Démarrage Windows
 

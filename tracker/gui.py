@@ -44,6 +44,7 @@ class Window(QMainWindow, DesktopTools):
     stop_capture_signal = Signal()
     ocr_request = Signal(object, object, str, bool)
     analysis_request = Signal(object, object, float)
+    scene_request = Signal(object, object, float)
 
     # Concrete QObject slots are required: PySide does not register slots inherited
     # from a plain Python mixin. These bridges keep SQLite and widgets on the UI thread.
@@ -75,6 +76,14 @@ class Window(QMainWindow, DesktopTools):
     def analysis_error(self, context, message):
         DesktopTools.analysis_error(self, context, message)
 
+    @Slot(object, object)
+    def scene_ready(self, context, observation):
+        DesktopTools.scene_ready(self, context, observation)
+
+    @Slot(object, str)
+    def scene_error(self, context, message):
+        DesktopTools.scene_error(self, context, message)
+
     open_video = Signal(str)
     seek_video = Signal(float)
     read_video = Signal()
@@ -82,7 +91,7 @@ class Window(QMainWindow, DesktopTools):
     def __init__(self, db_path=None):
         super().__init__()
         self._closing = False
-        self.setWindowTitle("Tracker Roulette — calibrage automatique v4")
+        self.setWindowTitle("Tracker Roulette — analyse dynamique v5")
         self.resize(1300, 850)
         if db_path is None:
             root = (

@@ -24,6 +24,7 @@ from tracker.capture import crop_roi, brave_windows, detect_wheel_roi
 from tracker.evaluation import PhysicalState, estimate, evaluate
 from tracker.experimental import CandidateTracker
 from tracker.ocr import reconcile, read_numbers
+from tracker.scene import SceneObserver, SceneObservation, intersection_over_union
 from tracker.storage import Store
 from tracker.benchmark import run as benchmark
 
@@ -114,6 +115,41 @@ class PersistenceTests(unittest.TestCase):
 
 
 class VisionTests(unittest.TestCase):
+    def test_dynamic_scene_requires_stability_and_resets_on_camera_cut(self):
+        observer = SceneObserver(confirmations=3)
+        roi = (0.2, 0.15, 0.45, 0.55)
+        dark = np.full((360, 640, 3), 20, np.uint8)
+        bright = np.full((360, 640, 3), 235, np.uint8)
+        with patch("tracker.scene.detect_wheel_roi", return_value=(roi, 0.8)):
+            first = observer.analyze(dark, 0.0)
+            second = observer.analyze(dark, 0.6)
+            stable = observer.analyze(dark, 1.2)
+            changed = observer.analyze(bright, 1.8)
+        self.assertIsNone(first.wheel_roi)
+        self.assertIsNone(second.wheel_roi)
+        for actual, expected in zip(stable.wheel_roi, roi):
+            self.assertAlmostEqual(actual, expected)
+        self.assertTrue(changed.camera_changed)
+        self.assertIsNone(changed.wheel_roi)
+        self.assertEqual(changed.stable_frames, 1)
+
+    def test_dynamic_scene_holds_brief_occlusion_then_drops_wheel(self):
+        observer = SceneObserver(confirmations=2, hold_seconds=1.0)
+        roi = (0.1, 0.2, 0.4, 0.5)
+        frame = np.full((360, 640, 3), 70, np.uint8)
+        with patch("tracker.scene.detect_wheel_roi", return_value=(roi, 0.75)):
+            observer.analyze(frame, 0.0)
+            observer.analyze(frame, 0.5)
+        with patch(
+            "tracker.scene.detect_wheel_roi",
+            side_effect=ValueError("not visible"),
+        ):
+            held = observer.analyze(frame, 1.0)
+            lost = observer.analyze(frame, 2.0)
+        self.assertEqual(held.wheel_roi, roi)
+        self.assertIsNone(lost.wheel_roi)
+        self.assertGreater(intersection_over_union(roi, roi), 0.99)
+
     def test_automatic_wheel_calibration_finds_concentric_ellipse(self):
         frame = np.full((540, 960, 3), 24, np.uint8)
         center = (620, 245)
@@ -396,6 +432,44 @@ class DesktopTests(unittest.TestCase):
                 w.close()
                 self.app.processEvents()
 
+    def test_dynamic_scene_overlay_is_ephemeral_and_clears_on_cut(self):
+        from tracker.gui import Window
+
+        with tempfile.TemporaryDirectory() as tmp:
+            w = Window(Path(tmp) / "gui.sqlite")
+            try:
+                w.latest_kind = "live"
+                context = (w.source_epoch, w.sid, "live", "", w.camera_epoch)
+                roi = (0.2, 0.1, 0.4, 0.5)
+                stable = SceneObservation(
+                    1.0, False, "wheel", roi, roi, 0.8, 3, "Roue stable"
+                )
+                w.scene_busy = True
+                w.scene_ready(context, stable)
+                self.assertEqual(w.dynamic_wheel_roi, roi)
+                self.assertEqual(w.live_image.regions["wheel_dynamic"], roi)
+                self.assertNotIn(
+                    "wheel_dynamic", w.store.profile(w.active_table())
+                )
+                epoch = w.camera_epoch
+                changed = SceneObservation(
+                    1.6,
+                    True,
+                    "wheel",
+                    roi,
+                    None,
+                    0.8,
+                    1,
+                    "Changement de caméra",
+                )
+                w.scene_ready(context, changed)
+                self.assertEqual(w.camera_epoch, epoch + 1)
+                self.assertIsNone(w.dynamic_wheel_roi)
+                self.assertNotIn("wheel_dynamic", w.live_image.regions)
+            finally:
+                w.close()
+                self.app.processEvents()
+
     def test_ocr_worker_is_queued_and_stale_context_is_ignored(self):
         from tracker.gui import Window
 
@@ -441,7 +515,7 @@ class DesktopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             w = Window(Path(tmp) / "gui.sqlite")
             try:
-                self.assertIn("calibrage automatique v4", w.windowTitle())
+                self.assertIn("analyse dynamique v5", w.windowTitle())
                 w.capture_active = True
                 w.capture_started_at = time.monotonic() - 4
                 w.poll_capture()

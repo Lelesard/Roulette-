@@ -26,6 +26,7 @@ from .capture import (
 )
 from .ocr import OCRWorker, reconcile
 from .experimental import CandidateTracker
+from .scene import SceneObserver
 from .widgets import FrameView
 
 
@@ -49,6 +50,26 @@ class AnalysisWorker(QObject):
             self.error.emit(context, str(exc))
 
 
+class SceneWorker(QObject):
+    ready = Signal(object, object)
+    error = Signal(object, str)
+
+    def __init__(self):
+        super().__init__()
+        self.observer = SceneObserver()
+        self.context = None
+
+    @Slot(object, object, float)
+    def analyze(self, context, frame, seconds):
+        try:
+            if context[:4] != self.context:
+                self.observer.reset()
+                self.context = context[:4]
+            self.ready.emit(context, self.observer.analyze(frame, seconds))
+        except Exception as exc:
+            self.error.emit(context, str(exc))
+
+
 class DesktopTools:
     """Mixin: signals are declared on Window, a QObject subclass."""
 
@@ -65,6 +86,10 @@ class DesktopTools:
         self.ocr_proposal = None
         self.analysis_busy = False
         self.last_analysis = 0.0
+        self.scene_busy = False
+        self.last_scene = 0.0
+        self.camera_epoch = 0
+        self.dynamic_wheel_roi = None
         for name in ("Deutsches Roulette", "VIP Roulette", "Table manuelle"):
             if name not in self.store.profile_names():
                 self.store.save_profile(name, {})
@@ -86,6 +111,10 @@ class DesktopTools:
         row.addWidget(self.capture_rate)
         self.button(row, "Démarrer", self.start_capture)
         self.button(row, "Arrêter", self.stop_capture)
+        self.automatic_scene = QCheckBox("Analyse automatique")
+        self.automatic_scene.setChecked(self.store.setting("automatic_scene", True))
+        self.automatic_scene.toggled.connect(self.toggle_automatic_scene)
+        row.addWidget(self.automatic_scene)
         self.live_image = FrameView()
         self.direct.addWidget(self.live_image, 1)
         self.live_image.selected.connect(self.save_roi)
@@ -95,6 +124,11 @@ class DesktopTools:
         )
         self.capture_status.setWordWrap(True)
         self.direct.addWidget(self.capture_status)
+        self.scene_status = QLabel(
+            "Scène : en attente • le cadre dynamique exige trois observations concordantes"
+        )
+        self.scene_status.setWordWrap(True)
+        self.direct.addWidget(self.scene_status)
         self.estimate_status = QLabel("Aucune estimation fiable")
         self.estimate_status.setStyleSheet("font-size:22px;color:#f9bf66;")
         self.direct.addWidget(self.estimate_status)
@@ -157,6 +191,18 @@ class DesktopTools:
             self.analysis_error, Qt.ConnectionType.QueuedConnection
         )
         self.analysis_thread.start()
+        self.scene_thread = QThread(self)
+        self.scene_worker = SceneWorker()
+        self.scene_worker.moveToThread(self.scene_thread)
+        self.scene_thread.finished.connect(self.scene_worker.deleteLater)
+        self.scene_request.connect(self.scene_worker.analyze)
+        self.scene_worker.ready.connect(
+            self.scene_ready, Qt.ConnectionType.QueuedConnection
+        )
+        self.scene_worker.error.connect(
+            self.scene_error, Qt.ConnectionType.QueuedConnection
+        )
+        self.scene_thread.start()
         # Reorder the nine functional pages, retaining their existing widgets.
         pages = {
             self.tabs.tabText(i): self.tabs.widget(i) for i in range(self.tabs.count())
@@ -175,6 +221,27 @@ class DesktopTools:
         ):
             self.tabs.addTab(pages[name], name)
         self.sync_profile()
+
+    def toggle_automatic_scene(self, enabled):
+        self.store.save_setting("automatic_scene", enabled)
+        self.scene_busy = False
+        self.camera_epoch += 1
+        self.dynamic_wheel_roi = None
+        self.clear_dynamic_scene()
+        self.scene_status.setText(
+            "Scène : recherche automatique active"
+            if enabled
+            else "Scène : analyse automatique désactivée"
+        )
+
+    def clear_dynamic_scene(self):
+        if not hasattr(self, "live_image"):
+            return
+        for view in (self.live_image, self.video_image):
+            view.regions.pop("wheel_dynamic", None)
+            view.regions.pop("wheel_candidate", None)
+            view.point = None
+            view.update()
 
     def capture_controls(self, layout, view):
         row = QHBoxLayout()
@@ -348,6 +415,9 @@ class DesktopTools:
             return
         self.timer.stop()
         self.source_epoch += 1
+        self.camera_epoch += 1
+        self.dynamic_wheel_roi = None
+        self.clear_dynamic_scene()
         self.capture_active = True
         self.latest_frame = None
         self.store.save_setting("capture_fps", self.capture_rate.value())
@@ -358,14 +428,19 @@ class DesktopTools:
         self.capture_log.info("ui.start")
         self.start_capture_signal.emit(handle, self.capture_rate.value())
         self.capture_status.setText("Démarrage de la capture visible…")
+        self.scene_status.setText("Scène : recherche de la roue et de la caméra…")
 
     def stop_capture(self):
         self.capture_log.info("ui.stop")
         self.capture_active = False
         self.source_epoch += 1
+        self.camera_epoch += 1
+        self.dynamic_wheel_roi = None
+        self.clear_dynamic_scene()
         self.latest_frame = None
         self.stop_capture_signal.emit()
         self.capture_status.setText("Capture arrêtée • Aucune estimation fiable")
+        self.scene_status.setText("Scène : analyse arrêtée")
 
     @Slot(str)
     def capture_error(self, message):
@@ -454,7 +529,7 @@ class DesktopTools:
             )
         )
         self.experimental_enabled = QCheckBox(
-            "Vidéos seulement : chercher un candidat bille expérimental (aucune estimation)"
+            "Chercher un candidat bille lorsque la roue est stable (expérimental)"
         )
         self.settings_page.addWidget(self.experimental_enabled)
         self.track_status = QLabel(
@@ -516,7 +591,16 @@ class DesktopTools:
             self.sid,
             kind,
             self.video_path if kind == "video" else "",
+            self.camera_epoch,
         )
+        if (
+            self.automatic_scene.isChecked()
+            and not self.scene_busy
+            and clock - self.last_scene >= 0.55
+        ):
+            self.scene_busy = True
+            self.last_scene = clock
+            self.scene_request.emit(context, frame.copy(), seconds)
         if (
             self.ocr_enabled.isChecked()
             and not self.ocr_busy
@@ -540,18 +624,18 @@ class DesktopTools:
                 except ValueError as exc:
                     self.ocr_review.setText(str(exc))
         if (
-            kind == "video"
-            and self.experimental_enabled.isChecked()
+            self.experimental_enabled.isChecked()
             and not self.analysis_busy
             and clock - self.last_analysis > 0.05
         ):
-            if "wheel_roi" not in config:
+            wheel_roi = self.dynamic_wheel_roi or config.get("wheel_roi")
+            if wheel_roi is None:
                 self.track_status.setText(
-                    "Calibrez le cylindre avant le suivi expérimental."
+                    "Suivi suspendu : aucune zone de roue stable."
                 )
             else:
                 try:
-                    roi = crop_roi(frame, config["wheel_roi"]).copy()
+                    roi = crop_roi(frame, wheel_roi).copy()
                     self.analysis_busy = True
                     self.last_analysis = clock
                     self.analysis_request.emit(context, roi, seconds)
@@ -559,7 +643,53 @@ class DesktopTools:
                     self.track_status.setText(str(exc))
 
     def context_valid(self, context):
-        return not self._closing and context[:2] == (self.source_epoch, self.sid)
+        return (
+            not self._closing
+            and context[:2] == (self.source_epoch, self.sid)
+            and (len(context) < 5 or context[4] == self.camera_epoch)
+        )
+
+    def scene_context_valid(self, context):
+        return (
+            not self._closing
+            and context[:2] == (self.source_epoch, self.sid)
+            and context[2] == self.latest_kind
+        )
+
+    @Slot(object, object)
+    def scene_ready(self, context, observation):
+        self.scene_busy = False
+        if not self.scene_context_valid(context) or not self.automatic_scene.isChecked():
+            return
+        if observation.camera_changed:
+            self.camera_epoch += 1
+            self.analysis_busy = False
+            self.dynamic_wheel_roi = None
+            self.clear_dynamic_scene()
+            self.track_status.setText(
+                "Changement de caméra : suivi réinitialisé • Aucune estimation fiable"
+            )
+        view = self.live_image if context[2] == "live" else self.video_image
+        view.regions.pop("wheel_candidate", None)
+        view.regions.pop("wheel_dynamic", None)
+        if observation.wheel_roi is not None:
+            self.dynamic_wheel_roi = observation.wheel_roi
+            view.regions["wheel_dynamic"] = observation.wheel_roi
+        elif observation.candidate_roi is not None:
+            self.dynamic_wheel_roi = None
+            view.regions["wheel_candidate"] = observation.candidate_roi
+        else:
+            self.dynamic_wheel_roi = None
+        view.update()
+        self.scene_status.setText("Scène : " + observation.message)
+
+    @Slot(object, str)
+    def scene_error(self, context, message):
+        self.scene_busy = False
+        if self.scene_context_valid(context):
+            self.dynamic_wheel_roi = None
+            self.clear_dynamic_scene()
+            self.scene_status.setText("Analyse de scène interrompue : " + message)
 
     @Slot(object, object)
     def ocr_ready(self, context, snapshot):
@@ -632,20 +762,23 @@ class DesktopTools:
         self.track_status.setText(
             f"{track.message}\nScore de continuité : {track.confidence:.2f} • ω : {track.omega if track.omega is not None else '—'} rad/s • α : {track.alpha if track.alpha is not None else '—'} rad/s²\nRotor non mesuré • Aucune estimation fiable"
         )
-        roi = self.store.profile(self.active_table()).get("wheel_roi")
+        roi = self.dynamic_wheel_roi or self.store.profile(
+            self.active_table()
+        ).get("wheel_roi")
+        view = self.live_image if context[2] == "live" else self.video_image
         if roi and track.point:
             frame = self.latest_frame
             if frame is not None:
                 h, w = crop_roi(frame, roi).shape[:2]
                 x, y = track.point
-                self.video_image.point = (
+                view.point = (
                     roi[0] + x / w * roi[2],
                     roi[1] + y / h * roi[3],
                 )
-                self.video_image.update()
+                view.update()
         else:
-            self.video_image.point = None
-            self.video_image.update()
+            view.point = None
+            view.update()
 
     @Slot(object, str)
     def analysis_error(self, context, message):
@@ -681,6 +814,11 @@ class DesktopTools:
         QMetaObject.invokeMethod(
             self.capture_worker, "stop", Qt.ConnectionType.BlockingQueuedConnection
         )
-        for thread in (self.capture_thread, self.ocr_thread, self.analysis_thread):
+        for thread in (
+            self.capture_thread,
+            self.ocr_thread,
+            self.analysis_thread,
+            self.scene_thread,
+        ):
             thread.quit()
             thread.wait()
