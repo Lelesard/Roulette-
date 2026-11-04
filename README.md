@@ -17,6 +17,19 @@ Le score affiché mesure uniquement la qualité géométrique du cadre. Il ne pr
 pas que la bille ou le rotor sont détectés. Le suivi expérimental doit être
 validé séparément.
 
+## Suivi expérimental de candidat bille
+
+La case **Bille expérimentale** dans Direct active un suivi multi-hypothèses
+uniquement lorsqu'une zone de roue stable existe. Le module compare jusqu'à
+24 trajectoires lumineuses, favorise le mouvement cohérent et écarte les points
+immobiles. Il tolère jusqu'à trois images manquantes, sans inventer de position
+pendant ces images, et repart de zéro après une coupure caméra.
+
+Le point affiché reste un **candidat lumineux non validé**. Les reflets mobiles,
+les repères du rotor ou les éléments de l'interface peuvent encore être choisis.
+Le score est une cohérence de trajectoire, pas une probabilité que le point soit
+la bille. Le rotor et l'estimation de secteur ne sont pas implémentés.
+
 ## Analyse dynamique des changements de caméra
 
 La case **Analyse automatique** active un observateur de scène dans Direct. Il

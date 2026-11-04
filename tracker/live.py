@@ -115,6 +115,12 @@ class DesktopTools:
         self.automatic_scene.setChecked(self.store.setting("automatic_scene", True))
         self.automatic_scene.toggled.connect(self.toggle_automatic_scene)
         row.addWidget(self.automatic_scene)
+        self.experimental_enabled = QCheckBox("Bille expérimentale")
+        self.experimental_enabled.setChecked(
+            self.store.setting("experimental_ball", False)
+        )
+        self.experimental_enabled.toggled.connect(self.toggle_experimental_ball)
+        row.addWidget(self.experimental_enabled)
         self.live_image = FrameView()
         self.direct.addWidget(self.live_image, 1)
         self.live_image.selected.connect(self.save_roi)
@@ -233,6 +239,20 @@ class DesktopTools:
             if enabled
             else "Scène : analyse automatique désactivée"
         )
+
+    def toggle_experimental_ball(self, enabled):
+        self.store.save_setting("experimental_ball", enabled)
+        self.analysis_busy = False
+        self.camera_epoch += 1
+        for view in (self.live_image, self.video_image):
+            view.point = None
+            view.update()
+        if hasattr(self, "track_status"):
+            self.track_status.setText(
+                "Suivi bille expérimental activé • en attente d’une roue stable"
+                if enabled
+                else "Suivi bille désactivé • Aucune estimation fiable"
+            )
 
     def clear_dynamic_scene(self):
         if not hasattr(self, "live_image"):
@@ -528,10 +548,12 @@ class DesktopTools:
                 "L’OCR n’engage et ne règle aucune mise. Vérifiez le sens de lecture avant de l’activer.\nL’ajout initial importe le panneau visible. Une répétition immobile ne crée aucun résultat.\nLes répétitions identiques indiscernables, les images illisibles et les recoupements ambigus exigent une saisie manuelle."
             )
         )
-        self.experimental_enabled = QCheckBox(
-            "Chercher un candidat bille lorsque la roue est stable (expérimental)"
+        self.settings_page.addWidget(
+            QLabel(
+                "Le suivi de bille expérimental se commande dans Direct. Un point "
+                "lumineux suivi n’est pas une bille validée."
+            )
         )
-        self.settings_page.addWidget(self.experimental_enabled)
         self.track_status = QLabel(
             "Suivi désactivé • rotor non mesuré • Aucune estimation fiable"
         )

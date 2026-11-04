@@ -91,7 +91,7 @@ class Window(QMainWindow, DesktopTools):
     def __init__(self, db_path=None):
         super().__init__()
         self._closing = False
-        self.setWindowTitle("Tracker Roulette — analyse dynamique v5")
+        self.setWindowTitle("Tracker Roulette — suivi bille expérimental v6")
         self.resize(1300, 850)
         if db_path is None:
             root = (

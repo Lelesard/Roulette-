@@ -1,4 +1,8 @@
-"""Offline candidate tracker. Bright blobs are hypotheses, not validated ball labels."""
+"""Experimental multi-hypothesis ball candidate tracker.
+
+The selected point is never treated as a validated ball label. Real roulette
+reflections and rotor details can still create coherent false tracks.
+"""
 
 from collections import deque
 from dataclasses import dataclass
@@ -19,29 +23,174 @@ class Track:
     message: str = "Aucune bille validée"
 
 
-class CandidateTracker:
-    """Ellipse from a tight wheel ROI, normalized to a circle; white outer-ring candidates.
+class Hypothesis:
+    def __init__(self, point):
+        self.points = deque([point], maxlen=45)
+        self.misses = 0
 
-    This heuristic cannot identify a ball against all reflections. A score measures
-    temporal consistency, never a probability of correct detection.
-    """
+    def predict(self, seconds):
+        last = self.points[-1]
+        if len(self.points) < 2:
+            return last[1]
+        previous = self.points[-2]
+        dt = last[0] - previous[0]
+        omega = (last[1] - previous[1]) / dt if dt > 0 else 0.0
+        return last[1] + omega * max(0.0, seconds - last[0])
+
+    def add(self, seconds, candidate):
+        x, y, raw_angle, radius, quality = candidate
+        predicted = self.predict(seconds)
+        angle = raw_angle + round((predicted - raw_angle) / (2 * math.pi)) * 2 * math.pi
+        self.points.append((seconds, angle, x, y, radius, quality))
+        self.misses = 0
+
+
+class CandidateTracker:
+    """Track moving bright hypotheses in the normalized outer wheel ring."""
 
     def __init__(self):
         self.reset()
 
     def reset(self):
-        self.points = deque(maxlen=60)
-        self.previous = None
+        self.points = deque(maxlen=45)
+        self.hypotheses = []
+        self.previous_small = None
+        self.previous_gray = None
         self.last_time = None
         self.shape = None
+
+    @staticmethod
+    def angular_distance(a, b):
+        return abs((a - b + math.pi) % (2 * math.pi) - math.pi)
+
+    def candidates(self, gray):
+        h, w = gray.shape
+        yy, xx = np.mgrid[:h, :w]
+        nx, ny = (xx - w / 2) / (w * 0.48), (yy - h / 2) / (h * 0.48)
+        radius = np.hypot(nx, ny)
+        contrast = cv2.subtract(gray, cv2.GaussianBlur(gray, (0, 0), 3))
+        motion = (
+            cv2.absdiff(gray, self.previous_gray)
+            if self.previous_gray is not None and self.previous_gray.shape == gray.shape
+            else np.zeros_like(gray)
+        )
+        mask = (
+            (gray > 190)
+            & (contrast > 12)
+            & (radius > 0.56)
+            & (radius < 1.08)
+        ).astype(np.uint8) * 255
+        mask = cv2.morphologyEx(
+            mask,
+            cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+        )
+        count, labels, stats, centers = cv2.connectedComponentsWithStats(mask)
+        result = []
+        for index in range(1, count):
+            area = stats[index, cv2.CC_STAT_AREA]
+            bw, bh = stats[index, cv2.CC_STAT_WIDTH : cv2.CC_STAT_HEIGHT + 1]
+            if not (
+                3 <= area <= max(18, h * w * 0.002)
+                and 0.28 < bw / max(1, bh) < 3.6
+            ):
+                continue
+            x, y = map(float, centers[index])
+            component = labels == index
+            brightness = float(np.mean(gray[component])) / 255
+            movement = float(np.mean(motion[component])) / 255
+            local_contrast = float(np.mean(contrast[component])) / 255
+            radial = float(radius[round(y), round(x)])
+            quality = (
+                0.42 * brightness
+                + 0.34 * min(1.0, movement * 3)
+                + 0.18 * min(1.0, local_contrast * 4)
+                + 0.06 * max(0.0, 1 - abs(radial - 0.84) / 0.28)
+            )
+            result.append(
+                (
+                    x,
+                    y,
+                    math.atan2(
+                        (y - h / 2) / (h * 0.48),
+                        (x - w / 2) / (w * 0.48),
+                    ),
+                    radial,
+                    quality,
+                )
+            )
+        return result
+
+    def update_hypotheses(self, candidates, seconds):
+        unused = set(range(len(candidates)))
+        for hypothesis in sorted(
+            self.hypotheses, key=lambda item: len(item.points), reverse=True
+        ):
+            if seconds - hypothesis.points[-1][0] > 0.22:
+                hypothesis.misses = 4
+                continue
+            predicted = hypothesis.predict(seconds)
+            previous_radius = hypothesis.points[-1][4]
+            choices = []
+            for index in unused:
+                candidate = candidates[index]
+                angle_cost = self.angular_distance(candidate[2], predicted)
+                radius_cost = abs(candidate[3] - previous_radius)
+                if angle_cost <= 1.25 and radius_cost <= 0.24:
+                    choices.append(
+                        (angle_cost + radius_cost * 1.8 - candidate[4] * 0.12, index)
+                    )
+            if choices:
+                _, index = min(choices)
+                hypothesis.add(seconds, candidates[index])
+                unused.remove(index)
+            else:
+                hypothesis.misses += 1
+        self.hypotheses = [item for item in self.hypotheses if item.misses <= 3]
+        for index in unused:
+            x, y, angle, radius, quality = candidates[index]
+            self.hypotheses.append(
+                Hypothesis((seconds, angle, x, y, radius, quality))
+            )
+        self.hypotheses = sorted(
+            self.hypotheses,
+            key=lambda item: (len(item.points), -item.misses, item.points[-1][5]),
+            reverse=True,
+        )[:24]
+
+    @staticmethod
+    def fit(hypothesis, seconds):
+        points = list(hypothesis.points)[-30:]
+        if len(points) < 7 or points[-1][0] - points[0][0] < 0.18:
+            return None
+        times = np.array([point[0] - seconds for point in points])
+        angles = np.array([point[1] for point in points])
+        if np.max(np.abs(np.diff(angles))) > 1.8:
+            return None
+        coeff = np.polyfit(times, angles, 2)
+        residual = float(
+            np.sqrt(np.mean((np.polyval(coeff, times) - angles) ** 2))
+        )
+        omega = float(coeff[1])
+        alpha = float(2 * coeff[0])
+        if residual > 0.22 or not 0.35 <= abs(omega) <= 40:
+            return None
+        quality = float(np.mean([point[5] for point in points]))
+        confidence = (
+            max(0.0, min(1.0, 1 - residual / 0.22))
+            * min(1.0, len(points) / 20)
+            * min(1.0, abs(omega) / 3)
+            * min(1.0, quality / 0.72)
+        )
+        return confidence, omega, alpha, residual
 
     def analyze(self, frame, seconds):
         h, w = frame.shape[:2]
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         small = cv2.resize(gray, (64, 64))
         changed = (
-            self.previous is not None
-            and np.mean(cv2.absdiff(small, self.previous)) > 38
+            self.previous_small is not None
+            and np.mean(cv2.absdiff(small, self.previous_small)) > 38
         )
         discontinuity = (
             self.last_time is not None and not 0 < seconds - self.last_time < 0.35
@@ -49,66 +198,65 @@ class CandidateTracker:
         resized = self.shape is not None and self.shape != (h, w)
         if changed or discontinuity or resized:
             self.points.clear()
-        self.previous, self.last_time, self.shape = small, seconds, (h, w)
+            self.hypotheses.clear()
         if changed or resized:
+            self.previous_small = small
+            self.previous_gray = gray
+            self.last_time = seconds
+            self.shape = (h, w)
             return Track(
                 seconds, message="Changement de caméra / zoom : suivi réinitialisé"
             )
-        yy, xx = np.mgrid[:h, :w]
-        nx, ny = (xx - w / 2) / (w * 0.48), (yy - h / 2) / (h * 0.48)
-        radius = np.hypot(nx, ny)
-        contrast = cv2.subtract(gray, cv2.GaussianBlur(gray, (0, 0), 3))
-        mask = (
-            (gray > 205) & (contrast > 22) & (radius > 0.65) & (radius < 1.04)
-        ).astype(np.uint8) * 255
-        count, labels, stats, centers = cv2.connectedComponentsWithStats(mask)
-        candidates = []
-        for i in range(1, count):
-            area = stats[i, cv2.CC_STAT_AREA]
-            bw, bh = stats[i, cv2.CC_STAT_WIDTH : cv2.CC_STAT_HEIGHT + 1]
-            if 2 <= area <= max(10, h * w * 0.0015) and 0.25 < bw / max(1, bh) < 4:
-                x, y = centers[i]
-                candidates.append(
-                    (
-                        float(x),
-                        float(y),
-                        math.atan2((y - h / 2) / (h * 0.48), (x - w / 2) / (w * 0.48)),
-                    )
-                )
-        if len(candidates) != 1:
+
+        candidates = self.candidates(gray)
+        self.update_hypotheses(candidates, seconds)
+        self.previous_small = small
+        self.previous_gray = gray
+        self.last_time = seconds
+        self.shape = (h, w)
+
+        fitted = []
+        for hypothesis in self.hypotheses:
+            if hypothesis.misses:
+                continue
+            result = self.fit(hypothesis, seconds)
+            if result is not None:
+                fitted.append((result[0], hypothesis, result))
+        if not fitted:
             self.points.clear()
-            return Track(
-                seconds, message="Bille perdue ou reflets ambigus : aucune mesure"
+            growing = max(
+                (item for item in self.hypotheses if item.misses == 0),
+                key=lambda item: len(item.points),
+                default=None,
             )
-        x, y, angle = candidates[0]
-        self.points.append((seconds, angle, x, y))
-        if len(self.points) < 8 or self.points[-1][0] - self.points[0][0] < 0.2:
+            if growing is None or not candidates:
+                return Track(
+                    seconds, message="Bille perdue ou reflets ambigus : aucune mesure"
+                )
+            point = growing.points[-1]
             return Track(
                 seconds,
-                (x, y),
-                angle,
-                message="Candidat lumineux : continuité insuffisante",
+                (point[2], point[3]),
+                point[1],
+                message=(
+                    f"Candidats lumineux : continuité {len(growing.points)}/7 • "
+                    "identité non validée"
+                ),
             )
-        times = np.array([p[0] - seconds for p in self.points])
-        angles = np.unwrap([p[1] for p in self.points])
-        # Sampling aliasing is not resolvable when inter-frame motion approaches pi.
-        if np.max(np.abs(np.diff(angles))) > 1.8:
-            self.points.clear()
-            return Track(
-                seconds, message="Mouvement trop rapide / aliasing : mesure rejetée"
-            )
-        coeff = np.polyfit(times, angles, 2)
-        residual = float(np.sqrt(np.mean((np.polyval(coeff, times) - angles) ** 2)))
-        confidence = max(0.0, min(1.0, 1 - residual / 0.2)) * min(1.0, len(times) / 20)
-        if residual > 0.12:
-            self.points.clear()
-            return Track(seconds, message="Trajectoire incohérente : candidat rejeté")
+
+        confidence, selected, result = max(fitted, key=lambda item: item[0])
+        self.points = deque(selected.points, maxlen=45)
+        point = selected.points[-1]
+        _, omega, alpha, residual = result
         return Track(
             seconds,
-            (x, y),
-            angle,
-            float(coeff[1]),
-            float(2 * coeff[0]),
+            (point[2], point[3]),
+            point[1],
+            omega,
+            alpha,
             confidence,
-            "Candidat bille expérimental • identité non validée • rotor non mesuré",
+            (
+                "Trajectoire lumineuse cohérente • candidat bille non validé • "
+                f"résidu {residual:.3f} rad • rotor non mesuré"
+            ),
         )

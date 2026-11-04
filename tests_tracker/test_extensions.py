@@ -215,6 +215,57 @@ class VisionTests(unittest.TestCase):
         self.assertIn("caméra", changed.message)
         self.assertFalse(tracker.points)
 
+    def test_tracker_selects_moving_ball_among_static_reflections(self):
+        tracker = CandidateTracker()
+        observation = None
+        for index in range(36):
+            frame = np.zeros((240, 240, 3), np.uint8)
+            for reflection in (0.2, 1.7, 3.4, 5.1):
+                cv2.circle(
+                    frame,
+                    (
+                        round(120 + 96 * math.cos(reflection)),
+                        round(120 + 96 * math.sin(reflection)),
+                    ),
+                    3,
+                    (225, 225, 225),
+                    -1,
+                )
+            angle = index * 0.065
+            ball = (
+                round(120 + 98 * math.cos(angle)),
+                round(120 + 98 * math.sin(angle)),
+            )
+            cv2.circle(frame, ball, 4, (255, 255, 255), -1)
+            observation = tracker.analyze(frame, index / 30)
+        self.assertIsNotNone(observation.omega)
+        self.assertAlmostEqual(observation.omega, 1.95, delta=0.35)
+        self.assertLess(math.dist(observation.point, ball), 5)
+        self.assertIn("non validé", observation.message)
+
+    def test_tracker_survives_two_missing_frames_without_inventing_points(self):
+        tracker = CandidateTracker()
+        observation = None
+        for index in range(28):
+            frame = np.zeros((200, 200, 3), np.uint8)
+            angle = index * 0.05
+            if index not in (14, 15):
+                cv2.circle(
+                    frame,
+                    (
+                        round(100 + 84 * math.cos(angle)),
+                        round(100 + 84 * math.sin(angle)),
+                    ),
+                    3,
+                    (255, 255, 255),
+                    -1,
+                )
+            observation = tracker.analyze(frame, index / 30)
+            if index in (14, 15):
+                self.assertIsNone(observation.point)
+        self.assertIsNotNone(observation.omega)
+        self.assertAlmostEqual(observation.omega, 1.5, delta=0.3)
+
     @unittest.skipUnless(
         shutil.which("tesseract"), "Moteur Tesseract facultatif absent"
     )
@@ -438,6 +489,11 @@ class DesktopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             w = Window(Path(tmp) / "gui.sqlite")
             try:
+                self.assertFalse(w.experimental_enabled.isChecked())
+                epoch_before_toggle = w.camera_epoch
+                w.experimental_enabled.setChecked(True)
+                self.assertTrue(w.store.setting("experimental_ball"))
+                self.assertEqual(w.camera_epoch, epoch_before_toggle + 1)
                 w.latest_kind = "live"
                 context = (w.source_epoch, w.sid, "live", "", w.camera_epoch)
                 roi = (0.2, 0.1, 0.4, 0.5)
@@ -515,7 +571,7 @@ class DesktopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             w = Window(Path(tmp) / "gui.sqlite")
             try:
-                self.assertIn("analyse dynamique v5", w.windowTitle())
+                self.assertIn("suivi bille expérimental v6", w.windowTitle())
                 w.capture_active = True
                 w.capture_started_at = time.monotonic() - 4
                 w.poll_capture()
