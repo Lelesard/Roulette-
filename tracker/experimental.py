@@ -41,7 +41,7 @@ def direction_label(omega):
 
 
 def validate_ball_direction(ball, rotor):
-    """Publish a ball direction only when an independent rotor opposes it."""
+    """Publish a ball direction only when its speed is independent of the rotor."""
     if ball.omega is None:
         return ball
     candidate_direction = direction_label(ball.omega)
@@ -55,21 +55,29 @@ def validate_ball_direction(ball, rotor):
                 "indépendante"
             ),
         )
-    if math.copysign(1, ball.omega) == math.copysign(1, rotor.omega):
+    minimum_independent_speed = max(0.7, 5 * abs(rotor.omega))
+    if abs(ball.omega) < minimum_independent_speed:
         return replace(
             ball,
             point=None,
             omega=None,
             alpha=None,
             message=(
-                f"Candidat rejeté : {candidate_direction}, même sens que le rotor • "
-                "reflet ou repère rotor probable"
+                f"Candidat rejeté : vitesse {abs(ball.omega):.2f} rad/s trop proche "
+                f"du rotor ({abs(rotor.omega):.2f} rad/s) • reflet rotor probable"
             ),
         )
+    ratio = abs(ball.omega) / max(abs(rotor.omega), 0.01)
+    relation = (
+        "même sens"
+        if math.copysign(1, ball.omega) == math.copysign(1, rotor.omega)
+        else "sens opposé"
+    )
     return replace(
         ball,
         message=(
-            f"{ball.message} • sens opposé au rotor confirmé sur l’image"
+            f"{ball.message} • mouvement indépendant du rotor confirmé "
+            f"(vitesse ×{ratio:.1f}, {relation})"
         ),
     )
 

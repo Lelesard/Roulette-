@@ -41,12 +41,13 @@ miroir inverse leur relation avec la roulette physique. Cette mesure ne fournit
 ni position absolue de la poche zéro, ni numéro ou secteur final.
 
 Une direction de bille n'est publiée que lorsqu'une direction de rotor est
-disponible sur la même image et que leurs sens sont opposés. Cette validation
-croisée rejette le cas observé sur la Legion Go où un reflet ou un repère du
-rotor était suivi comme bille et changeait de sens exactement avec lui. Sans
-rotor indépendant, le candidat reste visible mais sa direction demeure en
-attente. Cette règle réduit ce faux positif précis sans valider l'identité de la
-bille face à tous les autres reflets possibles.
+disponible sur la même image et que la vitesse du candidat est indépendante :
+au moins 0,7 rad/s et cinq fois la vitesse du rotor. La vidéo réelle de cette
+table montre que la bille et le rotor peuvent tourner dans le même sens. Imposer
+des signes opposés, comme en v9, rejetait donc la vraie bille. Sans rotor mesuré,
+le candidat reste visible mais sa direction demeure en attente. Cette règle
+réduit les faux repères synchronisés sans valider l'identité de la bille face à
+tous les autres reflets possibles.
 
 ## Analyse dynamique des changements de caméra
 

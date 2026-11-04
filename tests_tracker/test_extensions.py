@@ -278,7 +278,7 @@ class VisionTests(unittest.TestCase):
         self.assertEqual(direction_label(-1.0), "antihoraire à l’écran")
         self.assertEqual(direction_label(None), "non mesuré")
 
-    def test_ball_direction_requires_an_opposing_rotor(self):
+    def test_ball_direction_requires_speed_independent_from_rotor(self):
         candidate = Track(
             1.0,
             point=(20, 30),
@@ -297,14 +297,20 @@ class VisionTests(unittest.TestCase):
         )
         self.assertIsNone(rejected.omega)
         self.assertIsNone(rejected.point)
-        self.assertIn("même sens que le rotor", rejected.message)
+        self.assertIn("vitesse", rejected.message)
 
-        validated = validate_ball_direction(
-            candidate, RotorTrack(1.0, omega=-0.5, confidence=0.7)
+        same_direction_fast = replace(candidate, omega=4.0)
+        validated_same = validate_ball_direction(
+            same_direction_fast, RotorTrack(1.0, omega=0.5, confidence=0.7)
         )
-        self.assertEqual(validated.omega, candidate.omega)
-        self.assertEqual(validated.point, candidate.point)
-        self.assertIn("sens opposé", validated.message)
+        self.assertEqual(validated_same.omega, 4.0)
+        self.assertIn("même sens", validated_same.message)
+
+        validated_opposite = validate_ball_direction(
+            same_direction_fast, RotorTrack(1.0, omega=-0.5, confidence=0.7)
+        )
+        self.assertEqual(validated_opposite.point, candidate.point)
+        self.assertIn("sens opposé", validated_opposite.message)
 
     def test_rotor_tracker_detects_both_rotation_directions(self):
         size = 240
@@ -719,7 +725,7 @@ class DesktopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             w = Window(Path(tmp) / "gui.sqlite")
             try:
-                self.assertIn("validation croisée v9", w.windowTitle())
+                self.assertIn("vitesses indépendantes v10", w.windowTitle())
                 w.capture_active = True
                 w.capture_started_at = time.monotonic() - 4
                 w.poll_capture()
