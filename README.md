@@ -17,7 +17,7 @@ Le score affiché mesure uniquement la qualité géométrique du cadre. Il ne pr
 pas que la bille ou le rotor sont détectés. Le suivi expérimental doit être
 validé séparément.
 
-## Suivi expérimental de candidat bille
+## Directions expérimentales de la bille et du rotor
 
 La case **Bille expérimentale** dans Direct active un suivi multi-hypothèses
 uniquement lorsqu'une zone de roue stable existe. Le module compare jusqu'à
@@ -28,7 +28,14 @@ pendant ces images, et repart de zéro après une coupure caméra.
 Le point affiché reste un **candidat lumineux non validé**. Les reflets mobiles,
 les repères du rotor ou les éléments de l'interface peuvent encore être choisis.
 Le score est une cohérence de trajectoire, pas une probabilité que le point soit
-la bille. Le rotor et l'estimation de secteur ne sont pas implémentés.
+la bille. Lorsque la trajectoire est continue, l'interface affiche son sens.
+
+Le même worker déroule en coordonnées polaires la bande centrale du cylindre et
+mesure le déplacement de ses détails entre deux images. Après cinq mesures
+concordantes, il affiche séparément le sens du rotor et son score de corrélation.
+Les sens **horaire** et **antihoraire** décrivent l'image affichée. Un flux mis en
+miroir inverse leur relation avec la roulette physique. Cette mesure ne fournit
+ni position absolue de la poche zéro, ni numéro ou secteur final.
 
 ## Analyse dynamique des changements de caméra
 
@@ -41,8 +48,8 @@ Une coupure caméra réinitialise immédiatement le suivi. Lorsque la roue est
 momentanément masquée, le dernier cadre est conservé pendant 1,5 seconde, puis
 retiré si elle ne réapparaît pas. Ces cadres dynamiques ne sont pas enregistrés
 dans le profil et ne remplacent pas un calibrage manuel. Le suivi expérimental de
-candidat bille peut maintenant utiliser une zone dynamique stable en direct,
-mais son identité et le rotor restent non validés.
+candidat bille et la mesure du rotor peuvent utiliser une zone dynamique stable
+en direct, mais leur identité physique reste non validée.
 
 ## Démarrage Windows
 
@@ -77,7 +84,7 @@ Garder Brave visible à côté du tracker et entièrement dans les écrans. Une 
 
 Cliquer sur **Calibrer le cylindre** puis tracer un rectangle sur l’aperçu. Pour le module vidéo expérimental, ce rectangle doit encadrer précisément l’ellipse du cylindre, sans marges inutiles. Calibrer séparément le panneau des résultats. Les régions sont sauvegardées par profil, en coordonnées relatives. **Recalibrer après un changement de caméra, de zoom ou de disposition, et lors du passage entre vidéo et Brave.** Un rectangle ne corrige pas une perspective projective complexe.
 
-Le tableau de bord affiche derniers résultats, bankroll, jeton, mises en attente et dernier règlement déclaré. Bille, rotor et fermeture des mises ne sont pas mesurés en direct. Le message reste **« Aucune estimation fiable »**.
+Le tableau de bord affiche derniers résultats, bankroll, jeton, mises en attente et dernier règlement déclaré. Le sens expérimental du candidat bille et celui du rotor sont affichés lorsqu'ils deviennent stables. La fermeture des mises et le résultat futur ne sont pas mesurés. Le message reste **« Aucune estimation fiable »**.
 
 ### Racetrack, jetons et règlement
 
@@ -119,9 +126,9 @@ Les nouveaux numéros sont déduits d’un recoupement d’au moins trois positi
 
 ### Candidat bille et modèle — Lots C et D partiels
 
-Activer dans Paramètres la recherche de candidat bille sur les **vidéos uniquement**. Un détecteur léger cherche un point clair contrasté dans l’anneau extérieur de l’ellipse calibrée, rejette les candidats multiples, ajuste l’angle déroulé dans le temps, affiche vitesse et accélération angulaires et marque le point retenu. Le score mesure la continuité du candidat, pas son identité. Les reflets, mouvements de caméra et aliasings restent des causes d’échec. Une coupure importante, une recherche temporelle, une perte ou un changement de dimensions réinitialise les mesures. La détection de changement de caméra est une heuristique et peut manquer des zooms ou des coupes.
+Activer **Bille expérimentale** dans Direct. Le traitement fonctionne sur la capture et sur les vidéos lorsque la roue est calibrée ou reconnue comme stable. Un détecteur léger cherche un point clair contrasté dans l’anneau extérieur, compare plusieurs trajectoires, ajuste l’angle déroulé dans le temps et affiche vitesse, accélération et sens du candidat retenu. En parallèle, la bande centrale du cylindre est déroulée pour mesurer le sens et la vitesse apparente du rotor par corrélation. Les scores mesurent la continuité et la corrélation, pas l'identité physique. Reflets, mouvements de caméra, perspective et aliasing restent des causes d’échec. Une coupure, une recherche temporelle, une perte ou un changement de dimensions réinitialise les mesures.
 
-Aucun détecteur IA, repérage automatique d’ellipse, suivi indépendant du rotor ni détection de fermeture des mises n’est implémenté. `tracker/evaluation.py` contient un modèle physique hors ligne exigeant des mesures de rotor et paramètres préalablement calibrés. Il refuse les états insuffisants ou postérieurs à la fermeture. **Ce modèle n’est pas branché sur une recommandation en direct**. Son principe et son protocole sont décrits dans `VALIDATION_TRACKER.md`.
+Aucun détecteur IA ni détection de fermeture des mises n’est implémenté. La mesure du rotor ne repère pas la poche zéro et ne constitue donc pas un angle absolu exploitable par le modèle physique. `tracker/evaluation.py` contient un modèle hors ligne exigeant cet angle et des paramètres préalablement calibrés. Il refuse les états insuffisants ou postérieurs à la fermeture. **Ce modèle n’est pas branché sur une recommandation en direct**. Son principe et son protocole sont décrits dans `VALIDATION_TRACKER.md`.
 
 ## Tests et compilation Windows
 
@@ -150,7 +157,7 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python tracker_main.py --smoke-test
 - `capture.py` : identification Brave Win32, capture visible MSS, contrôle de débit.
 - `ocr.py` : Tesseract dans un worker et recoupement de panneaux.
 - `vision.py` : contrat d’extension `OfflineAnalyzer` / `Observation`, détecteur neutre par défaut.
-- `experimental.py` : candidat bille hors ligne ; aucun rotor simulé.
+- `experimental.py` : candidat bille et sens du rotor expérimentaux.
 - `evaluation.py` : modèle physique gardé et évaluation chronologique de secteurs.
 - `benchmark.py` : mesures de localisation sur frames annotées indépendamment.
 

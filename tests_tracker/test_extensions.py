@@ -22,7 +22,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from tracker.capture import crop_roi, brave_windows, detect_wheel_roi
 from tracker.evaluation import PhysicalState, estimate, evaluate
-from tracker.experimental import CandidateTracker
+from tracker.experimental import CandidateTracker, RotorTracker, direction_label
 from tracker.ocr import reconcile, read_numbers
 from tracker.scene import SceneObserver, SceneObservation, intersection_over_union
 from tracker.storage import Store
@@ -265,6 +265,53 @@ class VisionTests(unittest.TestCase):
                 self.assertIsNone(observation.point)
         self.assertIsNotNone(observation.omega)
         self.assertAlmostEqual(observation.omega, 1.5, delta=0.3)
+
+    def test_direction_labels_follow_the_displayed_image(self):
+        self.assertEqual(direction_label(1.0), "horaire à l’écran")
+        self.assertEqual(direction_label(-1.0), "antihoraire à l’écran")
+        self.assertEqual(direction_label(None), "non mesuré")
+
+    def test_rotor_tracker_detects_both_rotation_directions(self):
+        size = 240
+        center = (size // 2, size // 2)
+        base = np.zeros((size, size, 3), np.uint8)
+        rng = np.random.default_rng(4)
+        for _ in range(80):
+            angle = rng.uniform(0, 2 * math.pi)
+            radius = rng.uniform(45, 90)
+            value = int(rng.integers(80, 256))
+            dot_radius = int(rng.integers(1, 4))
+            cv2.circle(
+                base,
+                (
+                    round(center[0] + radius * math.cos(angle)),
+                    round(center[1] + radius * math.sin(angle)),
+                ),
+                dot_radius,
+                (value, value, value),
+                -1,
+            )
+
+        for degrees_per_frame, expected_sign in ((-2, 1), (2, -1)):
+            tracker = RotorTracker()
+            observation = None
+            for index in range(30):
+                transform = cv2.getRotationMatrix2D(
+                    center, degrees_per_frame * index, 1
+                )
+                frame = cv2.warpAffine(base, transform, (size, size))
+                observation = tracker.analyze(frame, index / 30)
+            self.assertIsNotNone(observation.omega)
+            self.assertEqual(int(np.sign(observation.omega)), expected_sign)
+            self.assertGreater(observation.confidence, 0.8)
+
+    def test_rotor_tracker_rejects_an_unchanged_blank_wheel(self):
+        tracker = RotorTracker()
+        observation = None
+        frame = np.zeros((200, 200, 3), np.uint8)
+        for index in range(12):
+            observation = tracker.analyze(frame, index / 30)
+        self.assertIsNone(observation.omega)
 
     @unittest.skipUnless(
         shutil.which("tesseract"), "Moteur Tesseract facultatif absent"
@@ -571,7 +618,7 @@ class DesktopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             w = Window(Path(tmp) / "gui.sqlite")
             try:
-                self.assertIn("suivi bille expérimental v6", w.windowTitle())
+                self.assertIn("directions bille et rotor v7", w.windowTitle())
                 w.capture_active = True
                 w.capture_started_at = time.monotonic() - 4
                 w.poll_capture()

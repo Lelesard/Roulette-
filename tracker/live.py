@@ -2,6 +2,7 @@
 
 import time
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QObject, QThread, QTimer, Signal, Slot, QMetaObject
@@ -25,7 +26,7 @@ from .capture import (
     to_image,
 )
 from .ocr import OCRWorker, reconcile
-from .experimental import CandidateTracker
+from .experimental import CandidateTracker, RotorTracker, direction_label
 from .scene import SceneObserver
 from .widgets import FrameView
 
@@ -37,6 +38,7 @@ class AnalysisWorker(QObject):
     def __init__(self):
         super().__init__()
         self.tracker = CandidateTracker()
+        self.rotor = RotorTracker()
         self.context = None
 
     @Slot(object, object, float)
@@ -44,8 +46,19 @@ class AnalysisWorker(QObject):
         try:
             if context != self.context:
                 self.tracker.reset()
+                self.rotor.reset()
                 self.context = context
-            self.ready.emit(context, self.tracker.analyze(frame, seconds))
+            ball = self.tracker.analyze(frame, seconds)
+            rotor = self.rotor.analyze(frame, seconds)
+            self.ready.emit(
+                context,
+                replace(
+                    ball,
+                    rotor_omega=rotor.omega,
+                    rotor_confidence=rotor.confidence,
+                    rotor_message=rotor.message,
+                ),
+            )
         except Exception as exc:
             self.error.emit(context, str(exc))
 
@@ -90,6 +103,8 @@ class DesktopTools:
         self.last_scene = 0.0
         self.camera_epoch = 0
         self.dynamic_wheel_roi = None
+        self.ball_state = "non mesurée"
+        self.rotor_state = "non mesuré"
         for name in ("Deutsches Roulette", "VIP Roulette", "Table manuelle"):
             if name not in self.store.profile_names():
                 self.store.save_profile(name, {})
@@ -244,6 +259,8 @@ class DesktopTools:
         self.store.save_setting("experimental_ball", enabled)
         self.analysis_busy = False
         self.camera_epoch += 1
+        self.ball_state = "non mesurée"
+        self.rotor_state = "non mesuré"
         for view in (self.live_image, self.video_image):
             view.point = None
             view.update()
@@ -437,6 +454,8 @@ class DesktopTools:
         self.source_epoch += 1
         self.camera_epoch += 1
         self.dynamic_wheel_roi = None
+        self.ball_state = "non mesurée"
+        self.rotor_state = "non mesuré"
         self.clear_dynamic_scene()
         self.capture_active = True
         self.latest_frame = None
@@ -456,6 +475,8 @@ class DesktopTools:
         self.source_epoch += 1
         self.camera_epoch += 1
         self.dynamic_wheel_roi = None
+        self.ball_state = "non mesurée"
+        self.rotor_state = "non mesuré"
         self.clear_dynamic_scene()
         self.latest_frame = None
         self.stop_capture_signal.emit()
@@ -505,7 +526,7 @@ class DesktopTools:
         self.last_capture_stamp = stamp
         self.capture_count = getattr(self, "capture_count", 0) + 1
         self.capture_status.setText(
-            f"Image {self.capture_count} • Capture {frame.shape[1]} × {frame.shape[0]} • {fps:.1f} FPS • capture {latency:.1f} ms • âge {max(0, time.monotonic() - stamp) * 1000:.1f} ms • bille / rotor non validés"
+            f"Image {self.capture_count} • Capture {frame.shape[1]} × {frame.shape[0]} • {fps:.1f} FPS • capture {latency:.1f} ms • âge {max(0, time.monotonic() - stamp) * 1000:.1f} ms • bille : {self.ball_state} • rotor : {self.rotor_state}"
         )
         self.receive_source(frame, stamp, "live")
 
@@ -687,6 +708,8 @@ class DesktopTools:
             self.camera_epoch += 1
             self.analysis_busy = False
             self.dynamic_wheel_roi = None
+            self.ball_state = "non mesurée"
+            self.rotor_state = "non mesuré"
             self.clear_dynamic_scene()
             self.track_status.setText(
                 "Changement de caméra : suivi réinitialisé • Aucune estimation fiable"
@@ -781,8 +804,19 @@ class DesktopTools:
         self.analysis_busy = False
         if not self.context_valid(context):
             return
+        self.ball_state = direction_label(track.omega)
+        self.rotor_state = direction_label(track.rotor_omega)
+        ball_omega = f"{track.omega:.2f}" if track.omega is not None else "—"
+        ball_alpha = f"{track.alpha:.2f}" if track.alpha is not None else "—"
+        rotor_omega = (
+            f"{track.rotor_omega:.2f}" if track.rotor_omega is not None else "—"
+        )
         self.track_status.setText(
-            f"{track.message}\nScore de continuité : {track.confidence:.2f} • ω : {track.omega if track.omega is not None else '—'} rad/s • α : {track.alpha if track.alpha is not None else '—'} rad/s²\nRotor non mesuré • Aucune estimation fiable"
+            f"Bille : {self.ball_state} • {track.message}\n"
+            f"Continuité bille : {track.confidence:.2f} • ω : {ball_omega} rad/s • α : {ball_alpha} rad/s²\n"
+            f"Rotor : {self.rotor_state} • {track.rotor_message}\n"
+            f"Confiance rotor : {track.rotor_confidence:.2f} • ω : {rotor_omega} rad/s\n"
+            "Sens observés sur l’image affichée • Aucune estimation fiable"
         )
         roi = self.dynamic_wheel_roi or self.store.profile(
             self.active_table()
@@ -806,6 +840,8 @@ class DesktopTools:
     def analysis_error(self, context, message):
         self.analysis_busy = False
         if self.context_valid(context):
+            self.ball_state = "non mesurée"
+            self.rotor_state = "non mesuré"
             self.track_status.setText("Analyse interrompue : " + message)
 
     def refresh_desktop(self):

@@ -21,6 +21,107 @@ class Track:
     alpha: float | None = None
     confidence: float = 0.0
     message: str = "Aucune bille validée"
+    rotor_omega: float | None = None
+    rotor_confidence: float = 0.0
+    rotor_message: str = "Rotor non mesuré"
+
+
+@dataclass(frozen=True)
+class RotorTrack:
+    seconds: float
+    omega: float | None = None
+    confidence: float = 0.0
+    message: str = "Rotor non mesuré"
+
+
+def direction_label(omega):
+    if omega is None or abs(omega) < 0.01:
+        return "non mesuré"
+    return "horaire à l’écran" if omega > 0 else "antihoraire à l’écran"
+
+
+class RotorTracker:
+    """Estimate rotor angular shift from a polar-unwrapped inner wheel band."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.previous = None
+        self.last_time = None
+        self.speeds = deque(maxlen=15)
+
+    @staticmethod
+    def polar_band(frame):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (3, 3), 0)
+        h, w = gray.shape
+        radius = min(h, w) * 0.48
+        polar = cv2.warpPolar(
+            gray,
+            (96, 720),
+            (w / 2, h / 2),
+            radius,
+            cv2.WARP_POLAR_LINEAR,
+        )
+        # Ignore the hub and the outer ball track. Pocket/number features live in
+        # the middle radial band and move with the rotor.
+        band = polar[:, 30:78].astype(np.float32)
+        band -= cv2.GaussianBlur(band, (0, 0), 3)
+        band *= np.hanning(band.shape[0]).astype(np.float32)[:, None]
+        return band
+
+    def analyze(self, frame, seconds):
+        band = self.polar_band(frame)
+        if self.previous is None or self.last_time is None:
+            self.previous, self.last_time = band, seconds
+            return RotorTrack(seconds, message="Rotor : initialisation")
+        dt = seconds - self.last_time
+        if not 0 < dt < 0.35 or self.previous.shape != band.shape:
+            self.reset()
+            self.previous, self.last_time = band, seconds
+            return RotorTrack(seconds, message="Rotor : suivi réinitialisé")
+        (radial_shift, angular_shift), response = cv2.phaseCorrelate(
+            self.previous, band
+        )
+        self.previous, self.last_time = band, seconds
+        omega = angular_shift / band.shape[0] * 2 * math.pi / dt
+        if (
+            response < 0.035
+            or abs(radial_shift) > 10
+            or not 0.08 <= abs(omega) <= 18
+        ):
+            self.speeds.clear()
+            return RotorTrack(
+                seconds,
+                message=f"Rotor ambigu • corrélation {max(0.0, response):.2f}",
+            )
+        self.speeds.append(float(omega))
+        if len(self.speeds) < 5:
+            return RotorTrack(
+                seconds,
+                message=f"Rotor : continuité {len(self.speeds)}/5",
+            )
+        speeds = np.array(self.speeds)
+        median = float(np.median(speeds))
+        direction_agreement = float(np.mean(np.sign(speeds) == np.sign(median)))
+        spread = float(np.median(np.abs(speeds - median)))
+        confidence = (
+            min(1.0, max(0.0, response) / 0.20)
+            * direction_agreement
+            * max(0.0, min(1.0, 1 - spread / max(abs(median), 0.2)))
+        )
+        if direction_agreement < 0.8 or confidence < 0.25:
+            return RotorTrack(
+                seconds,
+                message="Rotor : direction instable, mesure rejetée",
+            )
+        return RotorTrack(
+            seconds,
+            median,
+            confidence,
+            f"Rotor {direction_label(median)} • mesure expérimentale",
+        )
 
 
 class Hypothesis:
@@ -257,6 +358,6 @@ class CandidateTracker:
             confidence,
             (
                 "Trajectoire lumineuse cohérente • candidat bille non validé • "
-                f"résidu {residual:.3f} rad • rotor non mesuré"
+                f"résidu {residual:.3f} rad"
             ),
         )
