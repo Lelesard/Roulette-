@@ -22,7 +22,14 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from tracker.capture import crop_roi, brave_windows, detect_wheel_roi
 from tracker.evaluation import PhysicalState, estimate, evaluate
-from tracker.experimental import CandidateTracker, RotorTracker, Track, direction_label
+from tracker.experimental import (
+    CandidateTracker,
+    RotorTracker,
+    RotorTrack,
+    Track,
+    direction_label,
+    validate_ball_direction,
+)
 from tracker.ocr import reconcile, read_numbers
 from tracker.scene import SceneObserver, SceneObservation, intersection_over_union
 from tracker.storage import Store
@@ -270,6 +277,34 @@ class VisionTests(unittest.TestCase):
         self.assertEqual(direction_label(1.0), "horaire à l’écran")
         self.assertEqual(direction_label(-1.0), "antihoraire à l’écran")
         self.assertEqual(direction_label(None), "non mesuré")
+
+    def test_ball_direction_requires_an_opposing_rotor(self):
+        candidate = Track(
+            1.0,
+            point=(20, 30),
+            omega=2.0,
+            alpha=-0.2,
+            confidence=0.8,
+            message="candidat cohérent",
+        )
+        waiting = validate_ball_direction(candidate, RotorTrack(1.0))
+        self.assertIsNone(waiting.omega)
+        self.assertIsNotNone(waiting.point)
+        self.assertIn("attente", waiting.message)
+
+        rejected = validate_ball_direction(
+            candidate, RotorTrack(1.0, omega=0.5, confidence=0.7)
+        )
+        self.assertIsNone(rejected.omega)
+        self.assertIsNone(rejected.point)
+        self.assertIn("même sens que le rotor", rejected.message)
+
+        validated = validate_ball_direction(
+            candidate, RotorTrack(1.0, omega=-0.5, confidence=0.7)
+        )
+        self.assertEqual(validated.omega, candidate.omega)
+        self.assertEqual(validated.point, candidate.point)
+        self.assertIn("sens opposé", validated.message)
 
     def test_rotor_tracker_detects_both_rotation_directions(self):
         size = 240
@@ -684,7 +719,7 @@ class DesktopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             w = Window(Path(tmp) / "gui.sqlite")
             try:
-                self.assertIn("diagnostic directions v8", w.windowTitle())
+                self.assertIn("validation croisée v9", w.windowTitle())
                 w.capture_active = True
                 w.capture_started_at = time.monotonic() - 4
                 w.poll_capture()

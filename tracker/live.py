@@ -26,7 +26,12 @@ from .capture import (
     to_image,
 )
 from .ocr import OCRWorker, reconcile
-from .experimental import CandidateTracker, RotorTracker, direction_label
+from .experimental import (
+    CandidateTracker,
+    RotorTracker,
+    direction_label,
+    validate_ball_direction,
+)
 from .scene import SceneObserver
 from .widgets import FrameView
 
@@ -48,8 +53,10 @@ class AnalysisWorker(QObject):
                 self.tracker.reset()
                 self.rotor.reset()
                 self.context = context
-            ball = self.tracker.analyze(frame, seconds)
             rotor = self.rotor.analyze(frame, seconds)
+            ball = validate_ball_direction(
+                self.tracker.analyze(frame, seconds), rotor
+            )
             self.ready.emit(
                 context,
                 replace(

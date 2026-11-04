@@ -5,7 +5,7 @@ reflections and rotor details can still create coherent false tracks.
 """
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 
 import cv2
@@ -38,6 +38,40 @@ def direction_label(omega):
     if omega is None or abs(omega) < 0.01:
         return "non mesuré"
     return "horaire à l’écran" if omega > 0 else "antihoraire à l’écran"
+
+
+def validate_ball_direction(ball, rotor):
+    """Publish a ball direction only when an independent rotor opposes it."""
+    if ball.omega is None:
+        return ball
+    candidate_direction = direction_label(ball.omega)
+    if rotor.omega is None:
+        return replace(
+            ball,
+            omega=None,
+            alpha=None,
+            message=(
+                f"Candidat {candidate_direction} en attente d’une direction rotor "
+                "indépendante"
+            ),
+        )
+    if math.copysign(1, ball.omega) == math.copysign(1, rotor.omega):
+        return replace(
+            ball,
+            point=None,
+            omega=None,
+            alpha=None,
+            message=(
+                f"Candidat rejeté : {candidate_direction}, même sens que le rotor • "
+                "reflet ou repère rotor probable"
+            ),
+        )
+    return replace(
+        ball,
+        message=(
+            f"{ball.message} • sens opposé au rotor confirmé sur l’image"
+        ),
+    )
 
 
 class RotorTracker:
